@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>华夏黄金ETF(518880) 技术分析系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 顶部状态栏：实时时钟 + 用户状态 -->
+    <div class="topbar">
+        <div class="topbar-left">
+            <span class="clock" id="realtimeClock">--年--月--日 --:--:--</span>
+        </div>
+        <div class="topbar-right" id="userStatus">
+            <a href="/auth/login" class="topbar-link">登录</a>
+            <span class="topbar-sep">|</span>
+            <a href="/auth/register" class="topbar-link">注册</a>
+        </div>
+    </div>
+
+    <div class="header">
+        <h1>📊 华夏黄金ETF(518880) 技术分析系统</h1>
+        <div class="subtitle">实时数据 · 技术指标 · 趋势分析 · 投资参考</div>
+    </div>
+    
+    <div class="container">
+        <!-- ETF简介 -->
+        <div class="info-section">
+            <h2>📖 什么是黄金ETF？</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <h4>💰 黄金ETF是什么？</h4>
+                    <p>黄金ETF(Exchange Traded Fund)是一种在交易所上市交易的开放式基金，以黄金为基础资产，追踪黄金价格波动。投资者可以像买卖股票一样交易黄金ETF。</p>
+                </div>
+                <div class="info-item">
+                    <h4>📈 518880 华夏黄金ETF</h4>
+                    <p>国内规模最大的黄金ETF之一，主要投资于上海黄金交易所的黄金现货合约，为投资者提供便捷的黄金投资渠道。</p>
+                </div>
+                <div class="info-item">
+                    <h4>⚠️ 投资风险</h4>
+                    <p>黄金ETF受金价波动影响，还包括市场风险、流动性风险等。本系统仅供参考，不构成投资建议，投资需谨慎。</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 指标说明 -->
+        <div class="indicator-guide">
+            <h2>📚 技术指标说明</h2>
+            <div class="indicator-tabs">
+                <button class="indicator-tab active" onclick="showIndicator('ma')">均线 MA</button>
+                <button class="indicator-tab" onclick="showIndicator('macd')">MACD</button>
+                <button class="indicator-tab" onclick="showIndicator('kdj')">KDJ</button>
+                <button class="indicator-tab" onclick="showIndicator('rsi')">RSI</button>
+                <button class="indicator-tab" onclick="showIndicator('boll')">布林带</button>
+                <button class="indicator-tab" onclick="showIndicator('volume')">成交量</button>
+            </div>
+            
+            <div id="ind-ma" class="indicator-content active">
+                <h4>移动平均线 (MA)</h4>
+                <ul>
+                    <li><strong>MA5:</strong> 5日收盘价平均值，反映短期趋势</li>
+                    <li><strong>MA10:</strong> 10日收盘价平均值，反映中期趋势</li>
+                    <li><strong>MA20:</strong> 20日收盘价平均值，反映中长期趋势</li>
+                    <li class="good">✓ 多头排列: MA5 > MA10 > MA20，看涨信号</li>
+                    <li class="bad">✗ 空头排列: MA5 < MA10 < MA20，看跌信号</li>
+                    <li class="warn">⚡ 价格上穿均线: 短期可能反弹</li>
+                    <li class="warn">⚡ 价格下穿均线: 短期可能调整</li>
+                </ul>
+            </div>
+            
+            <div id="ind-macd" class="indicator-content">
+                <h4>MACD (指数平滑异同移动平均线)</h4>
+                <ul>
+                    <li><strong>MACD线:</strong> 短期EMA减长期EMA，反映价格动量</li>
+                    <li><strong>Signal线:</strong> MACD的9日EMA，作为触发线</li>
+                    <li><strong>Histogram:</strong> MACD与Signal的差值柱状图</li>
+                    <li class="good">✓ 金叉: MACD上穿Signal，<span class="good">买入信号</span></li>
+                    <li class="bad">✗ 死叉: MACD下穿Signal，<span class="bad">卖出信号</span></li>
+                    <li class="good">✓ 零轴上方: 多方市场</li>
+                    <li class="bad">✗ 零轴下方: 空方市场</li>
+                    <li class="warn">⚡ Histogram放大: 趋势加强</li>
+                    <li class="warn">⚡ Histogram收缩: 趋势减弱</li>
+                </ul>
+            </div>
+            
+            <div id="ind-kdj" class="indicator-content">
+                <h4>KDJ (随机指标)</h4>
+                <ul>
+                    <li><strong>K值:</strong> 快速随机指标，反映近期价格位置</li>
+                    <li><strong>D值:</strong> K值的平滑平均值，更稳定</li>
+                    <li><strong>J值:</strong> 3×K - 2×D，对价格变化最敏感</li>
+                    <li class="bad">⚠️ J值 > 80: <span class="bad">超买区域</span>，警惕回调风险</li>
+                    <li class="good">⚠️ J值 < 20: <span class="good">超卖区域</span>，关注反弹机会</li>
+                    <li class="good">✓ 金叉: K上穿D，<span class="good">买入信号</span></li>
+                    <li class="bad">✗ 死叉: K下穿D，<span class="bad">卖出信号</span></li>
+                    <li><strong>取值范围:</strong> 0-100，50为多空分界</li>
+                </ul>
+            </div>
+            
+            <div id="ind-rsi" class="indicator-content">
+                <h4>RSI (相对强弱指数)</h4>
+                <ul>
+                    <li><strong>计算原理:</strong> 衡量价格涨跌的相对强度，取值0-100</li>
+                    <li class="bad">⚠️ RSI > 70: <span class="bad">超买区域</span>，市场可能过热</li>
+                    <li class="good">⚠️ RSI < 30: <span class="good">超卖区域</span>，市场可能超跌</li>
+                    <li class="good">✓ RSI > 50: <span class="good">多方占优</span>，偏多头</li>
+                    <li class="bad">✗ RSI < 50: <span class="bad">空方占优</span>，偏空头</li>
+                    <li class="warn">⚡ RSI背离: 价格创新高但RSI下降，警惕见顶</li>
+                    <li><strong>参数说明:</strong> 14日RSI最常用</li>
+                </ul>
+            </div>
+            
+            <div id="ind-boll" class="indicator-content">
+                <h4>布林带 (Bollinger Bands)</h4>
+                <ul>
+                    <li><strong>上轨:</strong> 中轨 + 2倍标准差，压力位</li>
+                    <li><strong>中轨:</strong> 20日均线，重要支撑/阻力</li>
+                    <li><strong>下轨:</strong> 中轨 - 2倍标准差，支撑位</li>
+                    <li class="warn">⚡ 价格触及上轨: 警惕回调风险</li>
+                    <li class="warn">⚡ 价格触及下轨: 关注反弹机会</li>
+                    <li class="good">✓ 布林带收口: 波动减小，可能突破</li>
+                    <li class="warn">⚡ 布林带开口: 波动加大，趋势确认</li>
+                    <li><strong>正常范围:</strong> 约95%的价格应在带内</li>
+                </ul>
+            </div>
+            
+            <div id="ind-volume" class="indicator-content">
+                <h4>成交量 (Volume)</h4>
+                <ul>
+                    <li><strong>定义:</strong> 一定时间内的交易数量</li>
+                    <li class="good">✓ 价涨量增: 多方强劲，趋势可能延续</li>
+                    <li class="bad">✗ 价跌量增: 空方强劲，可能继续下跌</li>
+                    <li class="warn">⚡ 缩量整理: 变盘前兆，观望等待</li>
+                    <li class="good">✓ 放量突破: 突破有效，趋势确认</li>
+                    <li class="bad">✗ 缩量突破: 可能是假突破，谨慎</li>
+                    <li><strong>颜色:</strong> 绿色=上涨日，红色=下跌日</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- 分析建议 -->
+        <div class="analysis-section">
+            <h2>🎯 综合分析建议</h2>
+            <div class="signal-grid" id="signalGrid">
+                <div class="loading">加载分析中...</div>
+            </div>
+            <div class="final-advice" id="finalAdvice">
+                <div class="loading">生成中...</div>
+            </div>
+        </div>
+        
+        <!-- 指标卡片 -->
+        <div class="cards" id="summaryCards">
+            <div class="loading">加载中...</div>
+        </div>
+        
+        <!-- 主图 -->
+        <div class="chart-container">
+            <div id="mainChart" class="chart">加载中...</div>
+        </div>
+        
+        <!-- 子图 -->
+        <div class="charts-grid">
+            <div class="chart-container">
+                <div id="macdChart" class="chart">加载中...</div>
+            </div>
+            <div class="chart-container">
+                <div id="kdjChart" class="chart">加载中...</div>
+            </div>
+            <div class="chart-container">
+                <div id="volumeChart" class="chart">加载中...</div>
+            </div>
+            <div class="chart-container">
+                <div id="moneyChart" class="chart">加载中...</div>
+            </div>
+        </div>
+        
+        <!-- 黄金国际新闻 -->
+        <div class="news-section">
+            <h2>📰 黄金国际新闻</h2>
+            <div class="news-grid" id="newsGrid">
+                <div class="loading">加载新闻中...</div>
+            </div>
+        </div>
+
+        <!-- 风险提示 -->
+        <div class="risk-warning">
+            <h4>⚠️ 风险提示</h4>
+            <p>本系统仅供技术分析参考，不构成任何投资建议。黄金ETF投资有风险，入市需谨慎。请根据自身风险承受能力做出投资决策，过往业绩不代表未来表现。</p>
+        </div>
+    </div>
+    
+    <div class="footer">
+        数据来源: 新浪财经 · 更新于 <span id="updateTime">-</span> · 仅供技术分析参考
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
