@@ -468,6 +468,76 @@
             <div class="grid-card-footer" id="gridFooter"></div>
         </div>
 
+        <!-- 模拟交易回测专区 -->
+        <div class="simulation-card" id="simulationCard" style="display:none;">
+            <div class="simulation-header">
+                <span class="simulation-title">🎮 模拟交易回测</span>
+                <button class="sim-run-btn" id="runSimBtn" onclick="runSimulation()">运行回测</button>
+            </div>
+            <div class="sim-params">
+                <div class="sim-param-group">
+                    <label>初始资金</label>
+                    <input type="number" id="simCapital" value="100000" min="10000" step="10000">
+                    <span class="unit">元</span>
+                </div>
+                <div class="sim-param-group">
+                    <label>网格数量</label>
+                    <select id="simGridCount">
+                        <option value="5">5格</option>
+                        <option value="10" selected>10格</option>
+                        <option value="15">15格</option>
+                        <option value="20">20格</option>
+                    </select>
+                </div>
+                <div class="sim-param-group">
+                    <label>网格区间</label>
+                    <select id="simSpreadType">
+                        <option value="fixed">固定(±5%)</option>
+                        <option value="atr">ATR动态</option>
+                    </select>
+                </div>
+                <div class="sim-param-group">
+                    <label>基准均线</label>
+                    <select id="simMaKey">
+                        <option value="MA5">MA5</option>
+                        <option value="MA10">MA10</option>
+                        <option value="MA20" selected>MA20</option>
+                        <option value="MA60">MA60</option>
+                    </select>
+                </div>
+            </div>
+            <!-- 加载遮罩 -->
+            <div class="sim-loading" id="simLoading" style="display:none;">
+                <div class="spinner"></div>
+                <span>回测运行中...</span>
+            </div>
+            <!-- 结果展示 -->
+            <div class="sim-results" id="simResults" style="display:none;">
+                <div class="sim-kpis" id="simKpis"></div>
+                <div class="sim-chart-container">
+                    <div id="simEquityChart" class="sim-chart"></div>
+                </div>
+                <div class="sim-trade-table">
+                    <h4>交易记录</h4>
+                    <table id="simTradeTable">
+                        <thead>
+                            <tr>
+                                <th>序号</th>
+                                <th>买入日期</th>
+                                <th>买入价格</th>
+                                <th>网格层</th>
+                                <th>卖出日期</th>
+                                <th>卖出价格</th>
+                                <th>盈亏(元)</th>
+                                <th>盈亏率</th>
+                            </tr>
+                        </thead>
+                        <tbody id="simTradeTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- 加载遮罩 -->
         <div class="page-loading hidden" id="pageLoading">
             <div class="spinner"></div>

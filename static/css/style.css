@@ -485,3 +485,168 @@ body {
     color: inherit;
     text-decoration: none;
 }
+
+/* ---------- 模拟交易区块 ---------- */
+.simulation-card {
+    background: #16213e;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    border: 2px solid #333;
+    overflow: hidden;
+}
+
+.simulation-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid #222;
+}
+
+.simulation-title {
+    font-size: 15px;
+    font-weight: bold;
+    color: #fff;
+}
+
+.sim-run-btn {
+    padding: 8px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.sim-run-btn:hover {
+    opacity: 0.9;
+}
+
+.sim-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 16px 20px;
+    background: rgba(0,0,0,0.1);
+    border-bottom: 1px solid #222;
+}
+
+.sim-param-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sim-param-group label {
+    font-size: 12px;
+    color: #888;
+}
+
+.sim-param-group input,
+.sim-param-group select {
+    padding: 6px 10px;
+    background: #1a1a2e;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 13px;
+}
+
+.sim-param-group input:focus,
+.sim-param-group select:focus {
+    border-color: #667eea;
+    outline: none;
+}
+
+.sim-param-group .unit {
+    font-size: 12px;
+    color: #666;
+}
+
+/* KPI卡片行 */
+.sim-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    padding: 16px 20px;
+}
+
+.sim-kpi-card {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 12px 16px;
+    text-align: center;
+}
+
+.sim-kpi-card .kpi-label {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 6px;
+}
+
+.sim-kpi-card .kpi-value {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.sim-kpi-card .kpi-value.positive { color: #26a69a; }
+.sim-kpi-card .kpi-value.negative { color: #ef5350; }
+
+/* 权益曲线图 */
+.sim-chart-container {
+    padding: 16px 20px;
+}
+
+.sim-chart {
+    width: 100%;
+    height: 280px;
+}
+
+/* 交易记录表格 */
+.sim-trade-table {
+    padding: 16px 20px;
+}
+
+.sim-trade-table h4 {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 12px;
+}
+
+.sim-trade-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.sim-trade-table th,
+.sim-trade-table td {
+    padding: 8px 12px;
+    text-align: center;
+    border-bottom: 1px solid #222;
+}
+
+.sim-trade-table th {
+    background: #1a1a2e;
+    color: #888;
+    font-weight: 500;
+}
+
+.sim-trade-table td {
+    color: #ccc;
+}
+
+.sim-trade-table td.positive { color: #26a69a; }
+.sim-trade-table td.negative { color: #ef5350; }
+
+.sim-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 30px;
+    color: #888;
+}

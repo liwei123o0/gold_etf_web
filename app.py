@@ -9,7 +9,7 @@ Flask 主入口文件
 import os
 from flask import Flask, render_template, redirect, url_for
 from flask_login import LoginManager, login_required
-from backend import data_bp, news_bp
+from backend import data_bp, news_bp, backtest_bp
 from backend.routes.auth import bp as auth_bp
 from backend.models.user import init_db
 
@@ -49,6 +49,7 @@ def create_app():
     app.register_blueprint(data_bp)
     app.register_blueprint(news_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(backtest_bp)
 
     @app.route('/')
     def index():

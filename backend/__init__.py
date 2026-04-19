@@ -8,6 +8,6 @@ backend 包：Flask 后端模块
 - models/    : 数据模型（用户等）
 """
 
-from backend.routes import data_bp, news_bp
+from backend.routes import data_bp, news_bp, backtest_bp
 
-__all__ = ['data_bp', 'news_bp']
+__all__ = ['data_bp', 'news_bp', 'backtest_bp']

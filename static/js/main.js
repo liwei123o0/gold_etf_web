@@ -813,11 +813,262 @@ function renderCharts(data) {
     });
 }
 
+// ========== 模拟交易 ==========
+async function runSimulation() {
+    const simCard = document.getElementById('simulationCard');
+    const simLoading = document.getElementById('simLoading');
+    const simResults = document.getElementById('simResults');
+
+    if (!simCard) return;
+
+    // 显示卡片（默认隐藏）
+    simCard.style.display = 'block';
+
+    // 获取参数
+    const capital = parseFloat(document.getElementById('simCapital').value) || 100000;
+    const gridCount = parseInt(document.getElementById('simGridCount').value) || 10;
+    const spreadType = document.getElementById('simSpreadType').value || 'fixed';
+    const maKey = document.getElementById('simMaKey').value || 'MA20';
+
+    // 获取当前页面的日期范围
+    const startInput = document.getElementById('startDateInput');
+    const endInput = document.getElementById('endDateInput');
+    const startDate = startInput ? startInput.value : null;
+    const endDate = endInput ? endInput.value : null;
+
+    // 显示加载
+    simLoading.style.display = 'flex';
+    simResults.style.display = 'none';
+
+    try {
+        const resp = await fetch('/api/backtest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                symbol: currentSymbol,
+                start_date: startDate,
+                end_date: endDate,
+                initial_capital: capital,
+                grid_count: gridCount,
+                spread_type: spreadType,
+                base_ma_key: maKey,
+            })
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: '回测失败' }));
+            throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+
+        const result = await resp.json();
+
+        // 渲染结果
+        renderSimulationResults(result);
+
+        // 先显示结果区域，等浏览器计算完容器尺寸后再渲染图表
+        simResults.style.display = 'block';
+        setTimeout(() => {
+            renderEquityCurve(result);
+            renderGridMarkersOnChart(result);
+        }, 150);
+
+    } catch (e) {
+        console.error('回测失败:', e);
+        simResults.innerHTML = `<div style="color:#ef5350;padding:20px;">回测失败: ${e.message}</div>`;
+        simResults.style.display = 'block';
+    } finally {
+        simLoading.style.display = 'none';
+    }
+}
+
+function renderSimulationResults(data) {
+    const kpisEl = document.getElementById('simKpis');
+    if (!kpisEl) return;
+
+    const isProfit = data.total_return_pct >= 0;
+    const sign = isProfit ? '+' : '';
+
+    const kpis = [
+        { label: '总收益率', value: `${sign}${data.total_return_pct}%`, cls: isProfit ? 'positive' : 'negative' },
+        { label: '最终资金', value: `${(data.final_equity / 10000).toFixed(2)}万`, cls: isProfit ? 'positive' : 'negative' },
+        { label: '交易次数', value: data.num_trades, cls: '' },
+        { label: '胜率', value: `${data.win_rate}%`, cls: data.win_rate >= 50 ? 'positive' : 'negative' },
+        { label: '最大回撤', value: `${data.max_drawdown_pct}%`, cls: data.max_drawdown_pct > 10 ? 'negative' : '' },
+    ];
+
+    kpisEl.innerHTML = kpis.map(k => `
+        <div class="sim-kpi-card">
+            <div class="kpi-label">${k.label}</div>
+            <div class="kpi-value ${k.cls}">${k.value}</div>
+        </div>
+    `).join('');
+
+    // 渲染交易记录表格
+    const tbody = document.getElementById('simTradeTableBody');
+    if (!tbody) return;
+
+    if (!data.trade_history || data.trade_history.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">暂无交易记录</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = data.trade_history.map((t, i) => {
+        const pnlCls = t.pnl >= 0 ? 'positive' : 'negative';
+        const pnlSign = t.pnl >= 0 ? '+' : '';
+        return `
+            <tr>
+                <td>${i + 1}</td>
+                <td>${t.entry_date}</td>
+                <td>${t.entry_price.toFixed(3)}</td>
+                <td>第${t.entry_grid}格</td>
+                <td>${t.exit_date}</td>
+                <td>${t.exit_price.toFixed(3)}</td>
+                <td class="${pnlCls}">${pnlSign}${t.pnl.toFixed(2)}</td>
+                <td class="${pnlCls}">${pnlSign}${t.pnl_pct.toFixed(2)}%</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function renderEquityCurve(data) {
+    const chartEl = document.getElementById('simEquityChart');
+    if (!chartEl) return;
+
+    // 销毁旧图表
+    if (chartInstances.simEquity) {
+        chartInstances.simEquity.dispose();
+    }
+
+    const chart = echarts.init(chartEl);
+    const equityData = (data.equity_curve || []).map(p => [p.date, p.equity]);
+
+    chart.setOption({
+        backgroundColor: 'transparent',
+        title: {
+            text: '权益曲线',
+            textStyle: { color: '#fff', fontSize: 14 },
+            left: 0,
+            top: 5
+        },
+        tooltip: {
+            trigger: 'axis',
+            formatter: params => {
+                if (!params || params.length === 0) return '';
+                const p = params[0];
+                return `${p.value[0]}<br/>权益: <b>${(p.value[1] / 10000).toFixed(2)}万</b>元`;
+            }
+        },
+        grid: { left: '10%', right: '5%', top: '25%', bottom: '12%' },
+        xAxis: {
+            type: 'category',
+            data: (data.equity_curve || []).map(p => p.date),
+            axisLabel: { color: '#888', fontSize: 10, interval: Math.floor((data.equity_curve || []).length / 6) },
+            axisLine: { lineStyle: { color: '#444' } }
+        },
+        yAxis: {
+            type: 'value',
+            axisLabel: {
+                color: '#888',
+                formatter: v => (v / 10000).toFixed(1) + '万'
+            },
+            splitLine: { lineStyle: { color: '#333' } },
+            axisLine: { lineStyle: { color: '#444' } }
+        },
+        dataZoom: [
+            { type: 'inside', start: 0, end: 100 },
+            { type: 'slider', start: 0, end: 100, height: 20, bottom: 0 }
+        ],
+        series: [{
+            name: '权益',
+            type: 'line',
+            data: equityData,
+            smooth: true,
+            lineStyle: { width: 2, color: '#667eea' },
+            areaStyle: {
+                color: {
+                    type: 'linear',
+                    x: 0, y: 0, x2: 0, y2: 1,
+                    colorStops: [
+                        { offset: 0, color: 'rgba(102,126,234,0.3)' },
+                        { offset: 1, color: 'rgba(102,126,234,0)' }
+                    ]
+                }
+            },
+            symbol: 'none'
+        }]
+    });
+
+    chartInstances.simEquity = chart;
+}
+
+function renderGridMarkersOnChart(data) {
+    const mainChart = chartInstances.main;
+    if (!mainChart || !data.trade_history || data.trade_history.length === 0) return;
+
+    const buyMarkers = data.trade_history.map(t => ({
+        name: '买入',
+        coord: [t.entry_date, t.entry_price],
+        value: t.entry_price,
+        itemStyle: { color: '#26a69a' }
+    }));
+
+    const sellMarkers = data.trade_history.map(t => ({
+        name: '卖出',
+        coord: [t.exit_date, t.exit_price],
+        value: t.exit_price,
+        itemStyle: { color: '#ef5350' }
+    }));
+
+    // 获取当前 option 并追加 series
+    const currentOption = mainChart.getOption();
+    const existingSeries = currentOption.series || [];
+
+    // 过滤掉旧的买卖点系列
+    const filteredSeries = existingSeries.filter(s =>
+        s.name !== '买入点' && s.name !== '卖出点'
+    );
+
+    mainChart.setOption({
+        series: [
+            ...filteredSeries,
+            {
+                name: '买入点',
+                type: 'scatter',
+                symbol: 'triangle',
+                symbolSize: 10,
+                data: buyMarkers,
+                itemStyle: { color: '#26a69a' },
+                tooltip: {
+                    formatter: p => `买入<br/>日期: ${p.data.coord[0]}<br/>价格: ${p.data.coord[1].toFixed(3)}`
+                }
+            },
+            {
+                name: '卖出点',
+                type: 'scatter',
+                symbol: 'triangle',
+                symbolSize: 10,
+                data: sellMarkers,
+                itemStyle: { color: '#ef5350' },
+                tooltip: {
+                    formatter: p => `卖出<br/>日期: ${p.data.coord[0]}<br/>价格: ${p.data.coord[1].toFixed(3)}`
+                }
+            }
+        ]
+    });
+}
+
 // ========== 启动 ==========
 document.addEventListener('DOMContentLoaded', () => {
     // 启动实时时钟
     updateClock();
     setInterval(updateClock, 1000);
+
+    // 初始化图表实例
+    chartInstances = {};
+
+    // 显示模拟交易卡片
+    const simCard = document.getElementById('simulationCard');
+    if (simCard) simCard.style.display = 'block';
 
     // 加载用户状态
     loadUserStatus();
