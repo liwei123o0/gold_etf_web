@@ -123,6 +123,206 @@
         @keyframes spin { to { transform: rotate(360deg); } }
         .page-loading .msg { color: #888; font-size: 14px; }
 
+        /* 综合交易信号栏 */
+        .trade-signal-bar {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 16px 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            border: 1px solid #333;
+        }
+        .trade-signal-bar.signal-buy {
+            border-color: #26a69a;
+            background: linear-gradient(135deg, rgba(38,166,154,0.15) 0%, rgba(22,33,62,0.95) 100%);
+        }
+        .trade-signal-bar.signal-sell {
+            border-color: #ef5350;
+            background: linear-gradient(135deg, rgba(239,83,80,0.15) 0%, rgba(22,33,62,0.95) 100%);
+        }
+        .trade-signal-bar.signal-watch {
+            border-color: #FF9800;
+            background: linear-gradient(135deg, rgba(255,152,0,0.15) 0%, rgba(22,33,62,0.95) 100%);
+        }
+        .signal-main {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 160px;
+        }
+        .signal-label {
+            font-size: 13px;
+            color: #888;
+            white-space: nowrap;
+        }
+        .signal-value {
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .signal-value.buy { color: #26a69a; }
+        .signal-value.sell { color: #ef5350; }
+        .signal-value.watch { color: #FF9800; }
+        .signal-detail {
+            font-size: 13px;
+            color: #aaa;
+            flex: 1;
+        }
+        .signal-detail span {
+            margin-right: 16px;
+        }
+        .signal-detail .ok { color: #26a69a; }
+        .signal-detail .warn { color: #FF9800; }
+        .signal-detail .bad { color: #ef5350; }
+
+        /* ---------- 网格交易专属卡片 ---------- */
+        .grid-card {
+            background: #16213e;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+            border: 2px solid #333;
+            overflow: hidden;
+        }
+        .grid-card.signal-buy { border-color: #26a69a; }
+        .grid-card.signal-sell { border-color: #ef5350; }
+        .grid-card.signal-hold { border-color: #FF9800; }
+
+        .grid-dynamic-badge {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgba(102,126,234,0.3);
+            color: #667eea;
+            font-weight: normal;
+            margin-left: 6px;
+        }
+        .grid-dynamic-badge.static {
+            background: rgba(255,152,0,0.2);
+            color: #FF9800;
+        }
+
+        .grid-ma-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .grid-ma-label {
+            font-size: 12px;
+            color: #888;
+        }
+        #gridMaSelect {
+            padding: 4px 10px;
+            background: #1a1a2e;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 13px;
+            cursor: pointer;
+            outline: none;
+        }
+        #gridMaSelect:focus {
+            border-color: #667eea;
+        }
+
+        .grid-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid #222;
+        }
+        .grid-card-title {
+            font-size: 15px;
+            font-weight: bold;
+            color: #fff;
+        }
+        .grid-card-range {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .grid-card-body {
+            display: flex;
+            gap: 20px;
+            padding: 16px 20px;
+        }
+
+        /* 网格可视化条 */
+        .grid-visual {
+            flex: 1;
+            min-width: 0;
+        }
+        .grid-bar-wrapper {
+            position: relative;
+            height: 36px;
+            background: #1a1a2e;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 6px;
+        }
+        .grid-bar-bg {
+            position: absolute;
+            inset: 0;
+            display: flex;
+        }
+        .grid-bar-cell {
+            flex: 1;
+            border-right: 1px solid rgba(255,255,255,0.06);
+            transition: background 0.3s;
+        }
+        .grid-bar-cell:last-child { border-right: none; }
+        .grid-bar-cell.filled { background: rgba(38,166,154,0.4); }
+        .grid-bar-cell.current { background: #667eea !important; box-shadow: 0 0 8px rgba(102,126,234,0.6); }
+        .grid-bar-pointer {
+            position: absolute;
+            top: -6px;
+            width: 0;
+            height: 0;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid #fff;
+            transform: translateX(-50%);
+            transition: left 0.3s;
+        }
+        .grid-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #555;
+        }
+
+        /* 网格参数 */
+        .grid-info {
+            width: 180px;
+            flex-shrink: 0;
+        }
+        .grid-stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 0;
+            border-bottom: 1px solid #222;
+        }
+        .grid-stat-row:last-child { border-bottom: none; }
+        .grid-stat-label { font-size: 12px; color: #888; }
+        .grid-stat-value { font-size: 13px; color: #fff; font-weight: bold; }
+
+        .grid-card-footer {
+            padding: 12px 20px;
+            font-size: 13px;
+            color: #aaa;
+            background: rgba(0,0,0,0.15);
+            border-top: 1px solid #222;
+        }
+        .grid-card-footer .action-buy { color: #26a69a; font-weight: bold; }
+        .grid-card-footer .action-sell { color: #ef5350; font-weight: bold; }
+        .grid-card-footer .action-hold { color: #FF9800; font-weight: bold; }
+
         /* 当前股票信息 */
         .current-stock {
             display: flex;
@@ -203,12 +403,69 @@
             </div>
         </div>
 
-        <!-- ===== 当前股票信息 ===== -->
+        <!-- 当前股票信息 -->
         <div class="current-stock" id="currentStockBar" style="display:none;">
             <span class="stock-badge">当前</span>
             <span class="stock-code" id="displayCode">sh518880</span>
             <span class="stock-name" id="displayName">加载中...</span>
             <span class="date-range" id="displayRange"></span>
+        </div>
+
+        <!-- 综合交易信号（醒目提示） -->
+        <div class="trade-signal-bar" id="tradeSignalBar" style="display:none;">
+            <div class="signal-main">
+                <span class="signal-label">🎯 今日交易信号</span>
+                <span class="signal-value" id="tradeSignalValue">-</span>
+            </div>
+            <div class="signal-detail" id="tradeSignalDetail"></div>
+        </div>
+
+        <!-- 网格交易专属卡片 -->
+        <div class="grid-card" id="gridCard" style="display:none;">
+            <div class="grid-card-header">
+                <span class="grid-card-title">📊 网格交易策略 <span class="grid-dynamic-badge" id="gridDynamicBadge"></span></span>
+                <div class="grid-ma-selector">
+                    <span class="grid-ma-label">基准均线</span>
+                    <select id="gridMaSelect" onchange="onMaChange()">
+                        <option value="MA5">MA5</option>
+                        <option value="MA10">MA10</option>
+                        <option value="MA20" selected>MA20</option>
+                        <option value="MA60">MA60</option>
+                        <option value="MACD">MACD(DIF)</option>
+                        <option value="MACD_SIGNAL">MACD(SIGNAL)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid-card-body">
+                <div class="grid-visual" id="gridVisual"></div>
+                <div class="grid-info">
+                    <div class="grid-stat-row">
+                        <span class="grid-stat-label">当前价格</span>
+                        <span class="grid-stat-value" id="gridPrice">-</span>
+                    </div>
+                    <div class="grid-stat-row">
+                        <span class="grid-stat-label">建议持仓</span>
+                        <span class="grid-stat-value" id="gridPosition">-</span>
+                    </div>
+                    <div class="grid-stat-row">
+                        <span class="grid-stat-label">网格区间</span>
+                        <span class="grid-stat-value" id="gridSpread">-</span>
+                    </div>
+                    <div class="grid-stat-row">
+                        <span class="grid-stat-label">每格步长</span>
+                        <span class="grid-stat-value" id="gridStep">-</span>
+                    </div>
+                    <div class="grid-stat-row">
+                        <span class="grid-stat-label">ATR(20日)</span>
+                        <span class="grid-stat-value" id="gridATR">-</span>
+                    </div>
+                    <div class="grid-stat-row">
+                        <span class="grid-stat-label">偏离均线</span>
+                        <span class="grid-stat-value" id="gridMA20Dev">-</span>
+                    </div>
+                </div>
+            </div>
+            <div class="grid-card-footer" id="gridFooter"></div>
         </div>
 
         <!-- 加载遮罩 -->

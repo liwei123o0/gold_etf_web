@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Tuple, Optional
 
 from backend.utils.indicators import calculate_indicators
 from backend.models.kline import KlineModel
+from backend.services.grid_trade import get_grid_signal
 
 # 默认 ETF 代码：华夏黄金 ETF（518880）
 DEFAULT_SYMBOL = "sh518880"
@@ -354,6 +355,15 @@ def generate_signals(latest: pd.Series) -> List[Tuple[str, str, str]]:
     else:
         signals.append(("资金流出", "⚠️ 谨慎", "近期资金净流出，主力撤退"))
 
+    # ---------- 网格交易信号 ----------
+    grid_sig = get_grid_signal(latest)
+    if grid_sig['signal'] == '买入':
+        signals.append(("网格信号", "📈 买入", f"价格位于网格第{grid_sig['current_grid']}格，建议{int(grid_sig['position_ratio']*100)}%持仓"))
+    elif grid_sig['signal'] == '卖出':
+        signals.append(("网格信号", "📉 卖出", f"价格触及网格顶部，建议止盈"))
+    else:
+        signals.append(("网格信号", "➡️ 持有", f"价格在网格中位，持仓{int(grid_sig['position_ratio']*100)}%"))
+
     return signals
 
 
@@ -384,6 +394,10 @@ def build_api_response(df: pd.DataFrame, symbol: str = DEFAULT_SYMBOL,
             return default
         return float(val)
 
+    # 计算 MACD_HIST 历史均值（用于 MACD 锚定模式的动态网格调整）
+    macd_hist_window = 20
+    macd_hist_mean = df['MACD_HIST'].iloc[-macd_hist_window:].mean() if len(df) >= macd_hist_window else df['MACD_HIST'].mean()
+
     return {
         'update_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'symbol_name': STOCK_NAMES.get(symbol, symbol.upper()),
@@ -396,8 +410,7 @@ def build_api_response(df: pd.DataFrame, symbol: str = DEFAULT_SYMBOL,
         'MA5': df['MA5'].fillna(0).tolist(),
         'MA10': df['MA10'].fillna(0).tolist(),
         'MA20': df['MA20'].fillna(0).tolist(),
-        'BB_UPPER': df['BB_UPPER'].fillna(0).tolist(),
-        'BB_LOWER': df['BB_LOWER'].fillna(0).tolist(),
+        'MA60': df['MA60'].fillna(0).tolist(),
         'MACD': df['MACD'].fillna(0).tolist(),
         'MACD_SIGNAL': df['MACD_SIGNAL'].fillna(0).tolist(),
         'MACD_HIST': df['MACD_HIST'].fillna(0).tolist(),
@@ -414,13 +427,68 @@ def build_api_response(df: pd.DataFrame, symbol: str = DEFAULT_SYMBOL,
             'MA5': safe(latest['MA5']),
             'MA10': safe(latest['MA10']),
             'MA20': safe(latest['MA20']),
+            'MA60': safe(latest['MA60']),
             'RSI': safe(latest['RSI']),
             'J': safe(latest['J']),
             'MACD': safe(latest['MACD']),
             'MACD_SIGNAL': safe(latest['MACD_SIGNAL']),
             'MACD_HIST': safe(latest['MACD_HIST']),
             '累计净流入': safe(latest['累计净流入']),
+            'ATR': safe(latest.get('ATR', 0)),
         },
         # 分析信号
         'signals': signals,
+        # 网格交易信号（4条均线 + 2种MACD基准，供前端切换）
+        'grid_signals': {
+            'MA5':  get_grid_signal(latest, ma_key='MA5'),
+            'MA10': get_grid_signal(latest, ma_key='MA10'),
+            'MA20': get_grid_signal(latest, ma_key='MA20'),
+            'MA60': get_grid_signal(latest, ma_key='MA60'),
+            'MACD': get_grid_signal(latest, macd_ma_key='MACD', macd_hist_window=macd_hist_window,
+                                    macd_hist_mean=macd_hist_mean),
+            'MACD_SIGNAL': get_grid_signal(latest, macd_ma_key='MACD_SIGNAL', macd_hist_window=macd_hist_window,
+                                           macd_hist_mean=macd_hist_mean),
+        },
+        # 兼容旧字段（默认用MA20）
+        'grid_signal': get_grid_signal(latest, ma_key='MA20'),
+        # 综合交易信号
+        'trade_signal': _calc_trade_signal(latest),
     }
+
+
+def _calc_trade_signal(latest: pd.Series) -> str:
+    """根据指标打分计算综合交易信号"""
+    score = 0
+    close = latest.get('收盘', 0)
+    ma5 = latest.get('MA5', 0)
+    ma10 = latest.get('MA10', 0)
+    macd_hist = latest.get('MACD_HIST', 0)
+    rsi = latest.get('RSI', 0)
+    j = latest.get('J', 0)
+
+    if close > ma5 and ma5 > ma10:
+        score += 1
+    elif close < ma5 and ma5 < ma10:
+        score -= 1
+
+    if macd_hist > 0:
+        score += 1
+    elif macd_hist < 0:
+        score -= 1
+
+    if rsi > 70:
+        score -= 1
+    elif rsi < 30:
+        score += 1
+
+    if j > 80:
+        score -= 1
+    elif j < 20:
+        score += 1
+
+    if score >= 2:
+        return "买入"
+    elif score <= -2:
+        return "卖出"
+    else:
+        return "观望"

@@ -9,6 +9,7 @@ let currentUser = null;
 let currentSymbol = 'sh518880';
 let _chartDates = [];  // 存储日期数组
 let _chartKdata = [];  // 存储K线数据 [开盘, 收盘, 最低, 最高]
+let _cachedData = null;  // 缓存最近一次API响应，供均线切换时直接重算
 
 // ========== 实时时钟 ==========
 function updateClock() {
@@ -191,6 +192,10 @@ async function loadStockData(code, startDate, endDate) {
         // 渲染图表和分析
         renderSummary(data);
         renderSignals(data);
+        renderTradeSignal(data);
+        renderGridCard(data);
+        // 缓存数据供均线切换时直接重算
+        _cachedData = data;
         renderCharts(data);
 
         // 更新时间戳
@@ -411,7 +416,171 @@ function renderSignals(data) {
     }
 }
 
-// ========== 渲染：新闻 ==========
+// ========== 渲染：综合交易信号 ==========
+function renderTradeSignal(data, maKey) {
+    const bar = document.getElementById('tradeSignalBar');
+    const valueEl = document.getElementById('tradeSignalValue');
+    const detailEl = document.getElementById('tradeSignalDetail');
+    if (!bar || !valueEl) return;
+
+    const signal = data.trade_signal || '观望';
+    const latest = data.latest || {};
+    const gridSignals = data.grid_signals || {};
+    const selectedMaKey = maKey || 'MA20';
+    const grid = gridSignals[selectedMaKey] || data.grid_signal || {};
+    const signals = data.signals || [];
+
+    // 显示信号栏
+    bar.style.display = 'flex';
+
+    // 样式
+    bar.className = 'trade-signal-bar';
+    if (signal === '买入') {
+        bar.classList.add('signal-buy');
+        valueEl.className = 'signal-value buy';
+        valueEl.textContent = '🟢 买入';
+    } else if (signal === '卖出') {
+        bar.classList.add('signal-sell');
+        valueEl.className = 'signal-value sell';
+        valueEl.textContent = '🔴 卖出';
+    } else {
+        bar.classList.add('signal-watch');
+        valueEl.className = 'signal-value watch';
+        valueEl.textContent = '➡️ 观望';
+    }
+
+    // 关键指标提示
+    const rsi = latest.RSI || 0;
+    const j = latest.J || 0;
+    const macdHist = latest.MACD_HIST || 0;
+    const parts = [];
+    parts.push(`RSI: <span class="${rsi > 70 ? 'bad' : rsi < 30 ? 'ok' : 'warn'}">${rsi.toFixed(1)}</span>`);
+    parts.push(`KDJ-J: <span class="${j > 80 ? 'bad' : j < 20 ? 'ok' : 'warn'}">${j.toFixed(1)}</span>`);
+    parts.push(`MACD柱: <span class="${macdHist > 0 ? 'ok' : 'bad'}">${macdHist.toFixed(4)}</span>`);
+
+    // 网格信息
+    if (grid.close) {
+        const gridEmoji = {'买入': '📈', '卖出': '📉', '持有': '➡️'}[grid.signal] || '➡️';
+        parts.push(`${gridEmoji}网格${grid.current_grid}/${grid.total_grids}格`);
+        parts.push(`📍持仓${Math.round(grid.position_ratio * 100)}%`);
+    }
+
+    detailEl.innerHTML = parts.join(' &nbsp;|&nbsp; ');
+}
+
+// ========== 渲染：网格交易专属卡片 ==========
+function renderGridCard(data) {
+    const card = document.getElementById('gridCard');
+    if (!card) return;
+
+    // 从 grid_signals 字典中取当前选中均线的结果
+    const selectEl = document.getElementById('gridMaSelect');
+    const maKey = selectEl ? selectEl.value.toUpperCase() : 'MA20';
+    const gridSignals = data.grid_signals || {};
+    const grid = gridSignals[maKey] || data.grid_signal || {};
+    if (!grid || !grid.close) {
+        card.style.display = 'none';
+        return;
+    }
+    card.style.display = 'block';
+
+    const n = grid.total_grids || 10;
+    const cur = grid.current_grid || 0;
+    const action = grid.signal || '持有';
+
+    // 卡片颜色
+    card.className = 'grid-card';
+    if (action === '买入') card.classList.add('signal-buy');
+    else if (action === '卖出') card.classList.add('signal-sell');
+    else card.classList.add('signal-hold');
+
+    // 动态/静态标签
+    const badgeEl = document.getElementById('gridDynamicBadge');
+    if (grid.dynamic_spread) {
+        badgeEl.textContent = 'ATR动态';
+        badgeEl.className = 'grid-dynamic-badge';
+    } else {
+        badgeEl.textContent = '固定参数';
+        badgeEl.className = 'grid-dynamic-badge static';
+    }
+
+    // 参数区
+    document.getElementById('gridPrice').textContent = grid.close?.toFixed(4) || '-';
+    document.getElementById('gridSpread').textContent = `±${grid.grid_spread_pct?.toFixed(1)}%`;
+    document.getElementById('gridStep').textContent = `${grid.step_pct?.toFixed(2)}%/格`;
+
+    // ATR 显示
+    const atrEl = document.getElementById('gridATR');
+    if (grid.atr) {
+        atrEl.textContent = `${grid.atr.toFixed(4)} (${grid.atr_pct?.toFixed(2)}%)`;
+        atrEl.style.color = '#667eea';
+    } else {
+        atrEl.textContent = '无数据';
+        atrEl.style.color = '#555';
+    }
+
+    // 均线偏离度
+    const ma20DevEl = document.getElementById('gridMA20Dev');
+    if (grid.ma_deviation_pct !== undefined && grid.ma_deviation_pct !== null) {
+        const dev = grid.ma_deviation_pct;
+        ma20DevEl.textContent = `${dev > 0 ? '+' : ''}${dev.toFixed(2)}%`;
+        ma20DevEl.style.color = dev > 0 ? '#26a69a' : '#ef5350';
+    } else {
+        ma20DevEl.textContent = '-';
+        ma20DevEl.style.color = '#555';
+    }
+
+    // MA20 基准价显示在顶部
+    const titleEl = card.querySelector('.grid-card-title');
+    if (titleEl) {
+        const badgeEl = document.getElementById('gridDynamicBadge');
+        const baseLabel = grid.base_label || `基准=${grid.base_price?.toFixed(4)}`;
+        badgeEl.title = `基准价：${baseLabel}`;
+    }
+
+    const posPct = Math.round((grid.position_ratio || 0) * 100);
+    const posEl = document.getElementById('gridPosition');
+    posEl.textContent = `${posPct}%`;
+    posEl.style.color = posPct >= 70 ? '#26a69a' : posPct >= 40 ? '#FF9800' : '#ef5350';
+
+    // 网格可视化条
+    const visualEl = document.getElementById('gridVisual');
+    let barCells = '';
+    for (let i = 0; i < n; i++) {
+        const filled = i < cur ? 'filled' : '';
+        const current = i === cur ? 'current' : '';
+        barCells += `<div class="grid-bar-cell ${filled} ${current}"></div>`;
+    }
+    const pointerLeft = n > 0 ? ((cur + 0.5) / n * 100) : 50;
+    visualEl.innerHTML = `
+        <div class="grid-bar-wrapper">
+            <div class="grid-bar-bg">${barCells}</div>
+            <div class="grid-bar-pointer" style="left:${pointerLeft}%"></div>
+        </div>
+        <div class="grid-labels">
+            <span>${grid.lower_bound?.toFixed(3)} (底)</span>
+            <span>${grid.upper_bound?.toFixed(3)} (顶)</span>
+        </div>
+    `;
+
+    // 底部建议
+    const footerEl = document.getElementById('gridFooter');
+    const emoji = {'买入': '📈', '卖出': '📉', '持有': '➡️'}[action] || '➡️';
+    const cls = {'买入': 'action-buy', '卖出': 'action-sell', '持有': 'action-hold'}[action] || 'action-hold';
+    footerEl.innerHTML = `${emoji} <span class="${cls}">${action}</span>：${grid.action_desc || ''} &nbsp;|&nbsp; 📍 第${cur}格/共${n}格`;
+}
+
+// ========== 均线切换重算网格 ==========
+function onMaChange() {
+    if (!_cachedData) return;
+    const selectEl = document.getElementById('gridMaSelect');
+    const maKey = selectEl ? selectEl.value.toUpperCase() : 'MA20';
+    // 用缓存数据直接重算（grid_signals 已包含所有均线结果）
+    renderGridCard(_cachedData);
+    // 联动更新交易信号区域
+    renderTradeSignal(_cachedData, maKey);
+}
+
 async function loadNews(symbol) {
     try {
         const url = symbol ? `/api/news?symbol=${encodeURIComponent(symbol)}` : '/api/news';
