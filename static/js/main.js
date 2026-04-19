@@ -331,39 +331,39 @@ function renderSummary(data) {
     const cards = [
         {
             label: '最新价',
-            value: latest.收盘.toFixed(3),
-            change: latest.涨跌幅,
-            icon: latest.涨跌幅 >= 0 ? '💹' : '💔'
+            value: latest['收盘'].toFixed(3),
+            change: latest['涨跌幅'],
+            icon: latest['涨跌幅'] >= 0 ? '💹' : '💔'
         },
         {
             label: 'MA5 短期',
-            value: latest.MA5.toFixed(3),
-            sub: latest.收盘 > latest.MA5 ? '价格>均线↑' : '价格<均线↓',
-            icon: latest.收盘 > latest.MA5 ? '✅' : '⚠️'
+            value: latest['MA5'].toFixed(3),
+            sub: latest['收盘'] > latest['MA5'] ? '价格>均线↑' : '价格<均线↓',
+            icon: latest['收盘'] > latest['MA5'] ? '✅' : '⚠️'
         },
         {
             label: 'MA10 中期',
-            value: latest.MA10.toFixed(3),
-            sub: latest.MA5 > latest.MA10 ? '多头排列' : '空头排列',
-            icon: latest.MA5 > latest.MA10 ? '✅' : '⚠️'
+            value: latest['MA10'].toFixed(3),
+            sub: latest['MA5'] > latest['MA10'] ? '多头排列' : '空头排列',
+            icon: latest['MA5'] > latest['MA10'] ? '✅' : '⚠️'
         },
         {
             label: 'RSI',
-            value: latest.RSI.toFixed(1),
-            sub: latest.RSI > 70 ? '超买⚠️' : latest.RSI < 30 ? '超卖📈' : '正常区间',
-            icon: latest.RSI > 70 ? '⚠️' : latest.RSI < 30 ? '📈' : '➡️'
+            value: latest['RSI'].toFixed(1),
+            sub: latest['RSI'] > 70 ? '超买⚠️' : latest['RSI'] < 30 ? '超卖📈' : '正常区间',
+            icon: latest['RSI'] > 70 ? '⚠️' : latest['RSI'] < 30 ? '📈' : '➡️'
         },
         {
             label: 'KDJ J值',
-            value: latest.J.toFixed(1),
-            sub: latest.J > 80 ? '超买⚠️' : latest.J < 20 ? '超卖📈' : '正常',
-            icon: latest.J > 80 ? '⚠️' : latest.J < 20 ? '📈' : '➡️'
+            value: latest['J'].toFixed(1),
+            sub: latest['J'] > 80 ? '超买⚠️' : latest['J'] < 20 ? '超卖📈' : '正常',
+            icon: latest['J'] > 80 ? '⚠️' : latest['J'] < 20 ? '📈' : '➡️'
         },
         {
             label: '资金流向',
-            value: (latest.累计净流入 / 1e8).toFixed(2) + '亿',
-            sub: latest.累计净流入 > 0 ? '净流入↑' : '净流出↓',
-            icon: latest.累计净流入 > 0 ? '✅' : '⚠️'
+            value: (latest['累计净流入'] / 1e8).toFixed(2) + '亿',
+            sub: latest['累计净流入'] > 0 ? '净流入↑' : '净流出↓',
+            icon: latest['累计净流入'] > 0 ? '✅' : '⚠️'
         }
     ];
 
@@ -404,10 +404,11 @@ function renderSignals(data) {
     });
 
     const adviceEl = document.getElementById('finalAdvice');
-    if (bullishCount > bearishCount + 2) {
+    const tradeSignal = data.trade_signal || '观望';
+    if (tradeSignal === '买入') {
         adviceEl.className = 'final-advice bullish';
         adviceEl.innerHTML = '<h3>📈 综合建议：短期偏多</h3><p>多个指标显示多方占优，但需注意KDJ超买风险。建议逢低布局，控制仓位，设定止损位。</p>';
-    } else if (bearishCount > bullishCount + 2) {
+    } else if (tradeSignal === '卖出') {
         adviceEl.className = 'final-advice bearish';
         adviceEl.innerHTML = '<h3>📉 综合建议：短期偏空</h3><p>多个指标显示空方占优，建议谨慎操作。可关注超卖信号出现时的反弹机会，但需快进快出。</p>';
     } else {

@@ -296,7 +296,7 @@ def get_full_data(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN,
     return df
 
 
-def generate_signals(latest: pd.Series) -> List[Tuple[str, str, str]]:
+def generate_signals(latest: pd.Series, df: Optional[pd.DataFrame] = None) -> List[Tuple[str, str, str]]:
     """
     基于最新行情数据生成综合技术分析信号。
 
@@ -304,56 +304,128 @@ def generate_signals(latest: pd.Series) -> List[Tuple[str, str, str]]:
     ----------
     latest : pd.Series
         DataFrame 最新一行（一条行情数据）
+    df : pd.DataFrame, optional
+        完整历史数据，用于背离检测等
 
     Returns
     -------
     List[Tuple[str, str, str]]
-        每项为 (信号名称, 信号状态, 描述)，例如：
-        ("均线多头", "✅ 看涨", "短期均线多头排列，价格强势")
+        每项为 (信号名称, 信号状态, 描述)
     """
     signals = []
 
+    close = float(latest['收盘'])
+    ma5 = float(latest['MA5']) if not pd.isna(latest.get('MA5')) else 0
+    ma10 = float(latest['MA10']) if not pd.isna(latest.get('MA10')) else 0
+    ma20 = float(latest['MA20']) if not pd.isna(latest.get('MA20')) else 0
+    macd = float(latest['MACD']) if not pd.isna(latest.get('MACD')) else 0
+    macd_sig = float(latest['MACD_SIGNAL']) if not pd.isna(latest.get('MACD_SIGNAL')) else 0
+    macd_hist = float(latest['MACD_HIST']) if not pd.isna(latest.get('MACD_HIST')) else 0
+    rsi = float(latest['RSI']) if not pd.isna(latest.get('RSI')) else 0
+    j_val = float(latest['J']) if not pd.isna(latest.get('J')) else 0
+    bb_upper = float(latest['BB_UPPER']) if not pd.isna(latest.get('BB_UPPER')) else 0
+    bb_lower = float(latest['BB_LOWER']) if not pd.isna(latest.get('BB_LOWER')) else 0
+    bb_mid = float(latest['BB_MID']) if not pd.isna(latest.get('BB_MID')) else 0
+
     # ---------- 均线信号 ----------
-    if latest['收盘'] > latest['MA5'] and latest['MA5'] > latest['MA10']:
+    if close > ma5 and ma5 > ma10:
         signals.append(("均线多头", "✅ 看涨", "短期均线多头排列，价格强势"))
-    elif latest['收盘'] < latest['MA5'] and latest['MA5'] < latest['MA10']:
+    elif close < ma5 and ma5 < ma10:
         signals.append(("均线空头", "⚠️ 看跌", "短期均线空头排列，价格弱势"))
     else:
         signals.append(("均线混乱", "➡️ 观望", "均线方向不明，建议等待"))
 
+    # ---------- 均线金叉/死叉 ----------
+    prev_ma5 = float(df['MA5'].iloc[-2]) if df is not None and len(df) >= 2 and not pd.isna(df['MA5'].iloc[-2]) else None
+    prev_ma10 = float(df['MA10'].iloc[-2]) if df is not None and len(df) >= 2 and not pd.isna(df['MA10'].iloc[-2]) else None
+    if prev_ma5 is not None and prev_ma10 is not None:
+        if ma5 > ma10 and prev_ma5 <= prev_ma10:
+            signals.append(("均线金叉", "📈 买入信号", "MA5上穿MA10，短期趋势转多"))
+        elif ma5 < ma10 and prev_ma5 >= prev_ma10:
+            signals.append(("均线死叉", "📉 卖出信号", "MA5下穿MA10，短期趋势转空"))
+
     # ---------- MACD 信号 ----------
-    if latest['MACD'] > 0 and latest['MACD'] > latest['MACD_SIGNAL']:
+    if macd > 0 and macd > macd_sig:
         signals.append(("MACD强势", "✅ 看涨", "MACD零轴上方，金叉运行中"))
-    elif latest['MACD'] < 0 and latest['MACD'] < latest['MACD_SIGNAL']:
+    elif macd < 0 and macd < macd_sig:
         signals.append(("MACD弱势", "⚠️ 看跌", "MACD零轴下方，死叉运行中"))
-    elif latest['MACD_HIST'] > 0 and latest['MACD'] < 0:
+    elif macd_hist > 0 and macd < 0:
         signals.append(("MACD反弹", "📈 谨慎看涨", "底部金叉信号，可能反弹"))
     else:
         signals.append(("MACD调整", "➡️ 观望", "MACD在零轴附近震荡"))
 
+    # ---------- MACD零轴穿越 ----------
+    prev_macd = float(df['MACD'].iloc[-2]) if df is not None and len(df) >= 2 and not pd.isna(df['MACD'].iloc[-2]) else None
+    if prev_macd is not None:
+        if macd > 0 and prev_macd <= 0:
+            signals.append(("MACD零轴上", "📈 买入信号", "DIF线上穿零轴，多头信号确认"))
+        elif macd < 0 and prev_macd >= 0:
+            signals.append(("MACD零轴下", "📉 卖出信号", "DIF线下穿零轴，空头信号确认"))
+
     # ---------- KDJ 信号 ----------
-    if latest['J'] > 80:
+    if j_val > 80:
         signals.append(("KDJ超买", "⚠️ 谨慎", "J值超买，短期可能回调"))
-    elif latest['J'] < 20:
+    elif j_val < 20:
         signals.append(("KDJ超卖", "📈 关注", "J值超卖，可能出现反弹"))
     else:
         signals.append(("KDJ中性", "➡️ 正常", "KDJ在合理区间"))
 
+    # ---------- KDJ背离 ----------
+    if df is not None and len(df) >= 10:
+        recent_close = [float(df['收盘'].iloc[i]) for i in range(-5, 0)]
+        recent_j = [float(df['J'].iloc[i]) for i in range(-5, 0) if not pd.isna(df['J'].iloc[i])]
+        if len(recent_j) >= 5:
+            price_hh = max(recent_close)
+            j_hh = max(recent_j)
+            price_ll = min(recent_close)
+            j_ll = min(recent_j)
+            if close > price_hh and j_val < j_hh - 10:
+                signals.append(("KDJ顶背离", "⚠️ 警惕", "价格创新高但J值未跟随，小心回调"))
+            elif close < price_ll and j_val > j_ll + 10:
+                signals.append(("KDJ底背离", "📈 关注", "价格创新低但J值未跟随，可能反弹"))
+
     # ---------- RSI 信号 ----------
-    if latest['RSI'] > 70:
+    if rsi > 70:
         signals.append(("RSI超买", "⚠️ 谨慎", "RSI超过70，市场可能过热"))
-    elif latest['RSI'] < 30:
+    elif rsi < 30:
         signals.append(("RSI超卖", "📈 关注", "RSI低于30，可能超跌反弹"))
-    elif latest['RSI'] > 50:
+    elif rsi > 50:
         signals.append(("RSI偏强", "✅ 偏多", "RSI在50以上，多方占优"))
     else:
         signals.append(("RSI偏弱", "⚠️ 偏空", "RSI在50以下，空方占优"))
 
+    # ---------- 布林带信号 ----------
+    if bb_upper > 0 and bb_lower > 0:
+        if close >= bb_upper:
+            signals.append(("布林上轨", "⚠️ 超买预警", "价格触及布林上轨，警惕回调风险"))
+        elif close <= bb_lower:
+            signals.append(("布林下轨", "📈 超卖反弹", "价格触及布林下轨，关注反弹机会"))
+        elif close > bb_mid:
+            signals.append(("布林偏强", "✅ 偏多", "价格在中轨上方，走势偏强"))
+        else:
+            signals.append(("布林偏弱", "⚠️ 偏空", "价格在中轨下方，走势偏弱"))
+
     # ---------- 资金信号 ----------
-    if latest['累计净流入'] > 0:
+    cum_flow = float(latest['累计净流入']) if not pd.isna(latest.get('累计净流入')) else 0
+    if cum_flow > 0:
         signals.append(("资金流入", "✅ 利好", "近期资金净流入，机构看多"))
     else:
         signals.append(("资金流出", "⚠️ 谨慎", "近期资金净流出，主力撤退"))
+
+    # ---------- 成交量信号 ----------
+    if df is not None and len(df) >= 5:
+        vol_series = df['成交量'].iloc[-5:]
+        avg_vol = vol_series.mean()
+        latest_vol = float(df['成交量'].iloc[-1])
+        vol_ratio = latest_vol / avg_vol if avg_vol > 0 else 0
+        if vol_ratio > 1.5:
+            change_pct = float(latest.get('涨跌幅', 0))
+            if change_pct > 0:
+                signals.append(("放量上涨", "✅ 强势", f"成交量放大至均量的{int(vol_ratio*100)}%，价涨量增"))
+            else:
+                signals.append(("放量下跌", "⚠️ 警惕", f"成交量放大至均量的{int(vol_ratio*100)}%，价跌量增"))
+        elif vol_ratio < 0.5:
+            signals.append(("缩量整理", "➡️ 观望", f"成交量萎缩至均量的{int(vol_ratio*100)}%，市场观望"))
 
     # ---------- 网格交易信号 ----------
     grid_sig = get_grid_signal(latest)
@@ -386,7 +458,7 @@ def build_api_response(df: pd.DataFrame, symbol: str = DEFAULT_SYMBOL,
         符合前端 /api/data 接口规范的字典
     """
     latest = df.iloc[-1]
-    signals = generate_signals(latest)
+    signals = generate_signals(latest, df)
 
     # 辅助函数：安全取值
     def safe(val, default=0.0):
@@ -418,6 +490,9 @@ def build_api_response(df: pd.DataFrame, symbol: str = DEFAULT_SYMBOL,
         'D': df['D'].fillna(0).tolist(),
         'J': df['J'].fillna(0).tolist(),
         'RSI': df['RSI'].fillna(0).tolist(),
+        'BB_UPPER': df['BB_UPPER'].fillna(0).tolist(),
+        'BB_MID': df['BB_MID'].fillna(0).tolist(),
+        'BB_LOWER': df['BB_LOWER'].fillna(0).tolist(),
         '资金净流入': df['资金净流入'].fillna(0).tolist(),
         '累计净流入': df['累计净流入'].fillna(0).tolist(),
         # 最新指标卡片
@@ -433,6 +508,9 @@ def build_api_response(df: pd.DataFrame, symbol: str = DEFAULT_SYMBOL,
             'MACD': safe(latest['MACD']),
             'MACD_SIGNAL': safe(latest['MACD_SIGNAL']),
             'MACD_HIST': safe(latest['MACD_HIST']),
+            'BB_UPPER': safe(latest.get('BB_UPPER', 0)),
+            'BB_MID': safe(latest.get('BB_MID', 0)),
+            'BB_LOWER': safe(latest.get('BB_LOWER', 0)),
             '累计净流入': safe(latest['累计净流入']),
             'ATR': safe(latest.get('ATR', 0)),
         },
