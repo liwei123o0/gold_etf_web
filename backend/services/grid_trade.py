@@ -317,7 +317,11 @@ def get_grid_signal(latest: pd.Series,
         if current_index <= 1:
             action = "买入"
             action_desc = f"MACD{macd_ma_key.replace('MACD_','')}低位，趋势弱，可买入"
+<<<<<<< HEAD
         elif current_index >= grid_count - 2:
+=======
+        elif current_index >= grid_count - 1:
+>>>>>>> origin/master
             action = "卖出"
             action_desc = f"MACD{macd_ma_key.replace('MACd_','')}高位，趋势强，逢高减仓"
         elif position_ratio >= 0.75:
@@ -331,7 +335,10 @@ def get_grid_signal(latest: pd.Series,
             action_desc = f"价格在{ macd_ma_key.replace('MACD_','') }中位，网格中位持仓"
 
         ma_key_for_label = macd_ma_key  # 兼容 base_label
+<<<<<<< HEAD
         step_size = grid_prices[1] - grid_prices[0]
+=======
+>>>>>>> origin/master
 
     else:
         # -------- 均线锚定模式（原有逻辑）--------
@@ -392,6 +399,7 @@ def get_grid_signal(latest: pd.Series,
         if current_index <= 1:
             action = "买入"
             action_desc = "价格接近网格底部区域，低位加仓时机"
+<<<<<<< HEAD
         elif current_index >= grid_count - 2:
             action = "卖出"
             action_desc = "价格进入网格上部区域，逢高减仓止盈"
@@ -401,6 +409,17 @@ def get_grid_signal(latest: pd.Series,
         elif position_ratio <= 0.25:
             action = "观望"
             action_desc = f"价格高于{ma_key}较多，轻仓等待"
+=======
+        elif current_index >= grid_count - 1:
+            action = "卖出"
+            action_desc = "价格触及网格顶部区域，逢高减仓止盈"
+        elif position_ratio >= 0.75:
+            action = "持有"
+            action_desc = f"价格低于{ma_key}，仓位充足，耐心持有"
+        elif position_ratio <= 0.25:
+            action = "观望"
+            action_desc = f"价格高于{ma_key}较多，轻仓或空仓，等待回落"
+>>>>>>> origin/master
         else:
             action = "持有"
             action_desc = f"价格在{ma_key}附近，网格中位持仓"
