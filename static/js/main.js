@@ -25,6 +25,272 @@ function updateClock() {
         `${year}年${month}月${day}日 ${hour}:${minute}:${second}`;
 }
 
+// ========== 实时行情轮询 ==========
+let _realtimeInterval = null;
+
+async function loadRealtimePrice() {
+    try {
+        const resp = await fetch(`/api/realtime?symbol=${currentSymbol}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data.code !== 0 || !data.data) return;
+
+        const item = data.data[currentSymbol];
+        if (!item || !item.price) return;
+
+        renderRealtimePrice(item);
+
+        // 更新今日K线到图表
+        updateTodayCandle(item);
+
+        // 用实时价格重新计算交易信号
+        loadRealtimeSignal(item.price, item.prev_close);
+    } catch (e) {
+        console.warn('实时数据获取失败:', e.message);
+    }
+}
+
+/**
+ * 用实时行情更新今日K线（蜡烛图最后一根）
+ * 规则：今日K线用 realtime 的 open/high/low/price(close)
+ * 若图表最后一根不是今天，则追加今日K线
+ */
+function updateTodayCandle(item) {
+    const mainChart = chartInstances.main;
+    if (!mainChart || !item) return;
+
+    const todayStr = item.date; // 'YYYY-MM-DD'
+    if (!todayStr) return;
+
+    // 找到今日在日期列表中的位置
+    let todayIdx = _chartDates.indexOf(todayStr);
+
+    if (todayIdx === -1) {
+        // 图表里没有今天 → 追加一根新K线
+        _chartDates.push(todayStr);
+        _chartKdata.push([item.open, item.price, item.low, item.high]);
+        todayIdx = _chartKdata.length - 1;
+    } else {
+        // 更新今日K线（取实际OHLC）
+        _chartKdata[todayIdx] = [item.open, item.price, item.low, item.high];
+    }
+
+    // 更新主图 series[0] (K线)
+    const candlestickData = _chartKdata.map(d => [d[0], d[1], d[2], d[3]]);
+    mainChart.setOption({
+        xAxis: { data: _chartDates },
+        series: [{ name: 'K线', data: candlestickData }]
+    });
+}
+
+async function loadRealtimeSignal(realtimePrice, prevClose) {
+    try {
+        const resp = await fetch('/api/signaltime', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                symbol: currentSymbol,
+                realtime_price: realtimePrice,
+                prev_close: prevClose || undefined,
+            })
+        });
+        if (!resp.ok) return;
+        const result = await resp.json();
+        if (result.code !== 0) return;
+
+        // 用实时信号更新信号栏（使用当前选中的均线）
+        const maSelectEl = document.getElementById('gridMaSelect');
+        const maKey = maSelectEl ? maSelectEl.value.toUpperCase() : 'MA20';
+        renderTradeSignal(result, maKey);
+        renderGridCardFromRealtime(result);
+    } catch (e) {
+        console.warn('实时信号计算失败:', e.message);
+    }
+}
+
+function renderGridCardFromRealtime(data) {
+    const card = document.getElementById('gridCard');
+    if (!card) return;
+
+    const gridSignals = data.grid_signals || {};
+    const selectEl = document.getElementById('gridMaSelect');
+    const maKey = selectEl ? selectEl.value.toUpperCase() : 'MA20';
+    const grid = gridSignals[maKey] || data.grid_signal || {};
+    if (!grid || !grid.close) return;
+
+    const n = grid.total_grids || 10;
+    const cur = grid.current_grid || 0;
+    const action = grid.signal || '持有';
+
+    // 卡片颜色
+    card.className = 'grid-card';
+    if (action === '买入') card.classList.add('signal-buy');
+    else if (action === '卖出') card.classList.add('signal-sell');
+    else card.classList.add('signal-hold');
+
+    // 动态/静态标签
+    const badgeEl = document.getElementById('gridDynamicBadge');
+    if (grid.dynamic_spread) {
+        badgeEl.textContent = 'ATR动态';
+        badgeEl.className = 'grid-dynamic-badge';
+    } else {
+        badgeEl.textContent = '固定参数';
+        badgeEl.className = 'grid-dynamic-badge static';
+    }
+
+    // 参数区
+    document.getElementById('gridPrice').textContent = grid.close?.toFixed(4) || '-';
+    document.getElementById('gridSpread').textContent = `±${grid.grid_spread_pct?.toFixed(1)}%`;
+    document.getElementById('gridStep').textContent = `${grid.step_pct?.toFixed(2)}%/格`;
+
+    const atrEl = document.getElementById('gridATR');
+    if (grid.atr) {
+        atrEl.textContent = `${grid.atr.toFixed(4)} (${grid.atr_pct?.toFixed(2)}%)`;
+        atrEl.style.color = '#667eea';
+    } else {
+        atrEl.textContent = '无数据';
+        atrEl.style.color = '#555';
+    }
+
+    const ma20DevEl = document.getElementById('gridMA20Dev');
+    if (grid.ma_deviation_pct !== undefined && grid.ma_deviation_pct !== null) {
+        const dev = grid.ma_deviation_pct;
+        ma20DevEl.textContent = `${dev > 0 ? '+' : ''}${dev.toFixed(2)}%`;
+        ma20DevEl.style.color = dev > 0 ? '#26a69a' : '#ef5350';
+    } else {
+        ma20DevEl.textContent = '-';
+        ma20DevEl.style.color = '#555';
+    }
+
+    const posPct = Math.round((grid.position_ratio || 0) * 100);
+    const posEl = document.getElementById('gridPosition');
+    posEl.textContent = `${posPct}%`;
+    posEl.style.color = posPct >= 70 ? '#26a69a' : posPct >= 40 ? '#FF9800' : '#ef5350';
+
+    // 网格可视化条
+    const visualEl = document.getElementById('gridVisual');
+    let barCells = '';
+    for (let i = 0; i < n; i++) {
+        const filled = i < cur ? 'filled' : '';
+        const current = i === cur ? 'current' : '';
+        barCells += `<div class="grid-bar-cell ${filled} ${current}"></div>`;
+    }
+    const pointerLeft = n > 0 ? ((cur + 0.5) / n * 100) : 50;
+    visualEl.innerHTML = `
+        <div class="grid-bar-wrapper">
+            <div class="grid-bar-bg">${barCells}</div>
+            <div class="grid-bar-pointer" style="left:${pointerLeft}%"></div>
+        </div>
+        <div class="grid-labels">
+            <span>${grid.lower_bound?.toFixed(3)} (底)</span>
+            <span>${grid.upper_bound?.toFixed(3)} (顶)</span>
+        </div>
+    `;
+
+    // 底部建议
+    const footerEl = document.getElementById('gridFooter');
+    const emoji = {'买入': '📈', '卖出': '📉', '持有': '➡️'}[action] || '➡️';
+    const cls = {'买入': 'action-buy', '卖出': 'action-sell', '持有': 'action-hold'}[action] || 'action-hold';
+    footerEl.innerHTML = `${emoji} <span class="${cls}">${action}</span>：${grid.action_desc || ''} &nbsp;|&nbsp; 📍 第${cur}格/共${n}格`;
+}
+
+function renderRealtimePrice(item) {
+    const priceEl = document.getElementById('rtPrice');
+    const changeEl = document.getElementById('rtChange');
+    const nameEl = document.getElementById('rtName');
+    const sourceEl = document.getElementById('rtSource');
+    const containerEl = document.getElementById('realtimePrice');
+
+    if (!priceEl) return;
+
+    // 显示容器
+    containerEl.style.display = 'inline-flex';
+    containerEl.style.alignItems = 'center';
+
+    // 名称
+    if (nameEl) nameEl.textContent = item.name || '';
+
+    // 价格
+    if (priceEl) {
+        priceEl.textContent = item.price.toFixed(3);
+    }
+
+    // 涨跌
+    if (changeEl) {
+        const change = item.change || 0;
+        const changePct = item.change_pct || 0;
+        const sign = change >= 0 ? '+' : '';
+        changeEl.textContent = `${sign}${change.toFixed(3)} (${sign}${changePct.toFixed(2)}%)`;
+
+        // 颜色：涨=red( ef5350)，跌=green( 26a69a)，正好跟A股颜色一致
+        if (change > 0) {
+            changeEl.className = 'rt-change up';
+        } else if (change < 0) {
+            changeEl.className = 'rt-change down';
+        } else {
+            changeEl.className = 'rt-change flat';
+        }
+    }
+
+    // 数据来源
+    if (sourceEl) {
+        sourceEl.textContent = item.time ? `(${item.source} ${item.time})` : `(${item.source})`;
+    }
+
+    // 同时更新指标卡片中的最新价
+    updateLatestPriceCard(item);
+}
+
+function updateLatestPriceCard(item) {
+    const cardsEl = document.getElementById('summaryCards');
+    if (!cardsEl) return;
+
+    const firstCard = cardsEl.querySelector('.card');
+    if (!firstCard) return;
+
+    const valueEl = firstCard.querySelector('.value');
+    const changeEl = firstCard.querySelector('.change');
+
+    if (valueEl) {
+        valueEl.textContent = item.price.toFixed(3);
+    }
+    if (changeEl) {
+        const changePct = item.change_pct || 0;
+        changeEl.textContent = `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`;
+        changeEl.className = `change ${changePct >= 0 ? 'up' : 'down'}`;
+    }
+}
+
+function startRealtimePolling(intervalMs = 60000) {
+    // 先立即加载一次
+    loadRealtimePrice();
+    // 再定时
+    if (_realtimeInterval) clearInterval(_realtimeInterval);
+    if (intervalMs <= 0) return; // 手动模式不自动轮询
+    _realtimeInterval = setInterval(loadRealtimePrice, intervalMs);
+}
+
+function stopRealtimePolling() {
+    if (_realtimeInterval) {
+        clearInterval(_realtimeInterval);
+        _realtimeInterval = null;
+    }
+}
+
+function onRealtimeIntervalChange() {
+    const select = document.getElementById('realtimeIntervalSelect');
+    if (!select) return;
+    const ms = parseInt(select.value, 10);
+    // 更新调用处传入正确参数
+    if (ms <= 0) {
+        stopRealtimePolling();
+        document.getElementById('realtimeStatus').textContent = '手动模式';
+    } else {
+        startRealtimePolling(ms);
+        document.getElementById('realtimeStatus').textContent = `自动刷新 ${ms/1000}秒`;
+    }
+}
+
 // ========== 用户状态 ==========
 async function loadUserStatus() {
     try {
@@ -168,6 +434,9 @@ async function loadStockData(code, startDate, endDate) {
     showLoading(true);
 
     try {
+        // 切换标的时先停止旧轮询
+        stopRealtimePolling();
+
         // 构造 URL 参数
         let url = `/api/data?symbol=${encodeURIComponent(code)}`;
         if (startDate) url += `&start_date=${startDate}`;
@@ -211,6 +480,11 @@ async function loadStockData(code, startDate, endDate) {
 
         // 更新 URL（不跳转）
         updateURL(code, startDate, endDate);
+
+        // 启动实时行情轮询（默认1分钟）
+        const intervalSelect = document.getElementById('realtimeIntervalSelect');
+        const ms = intervalSelect ? parseInt(intervalSelect.value, 10) : 60000;
+        startRealtimePolling(ms);
 
     } catch (e) {
         console.error('数据加载失败:', e);

@@ -68,6 +68,13 @@ body {
     text-decoration: underline;
 }
 
+/* 实时价格 */
+.realtime-price .rt-price { font-size: 15px; }
+.realtime-price .up { color: #ef5350; }
+.realtime-price .down { color: #26a69a; }
+.realtime-price .flat { color: #888; }
+.realtime-price .stale { opacity: 0.5; font-size: 11px; }
+
 /* ---------- 头部 ---------- */
 .header {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
