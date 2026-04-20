@@ -103,6 +103,7 @@ async function loadRealtimeSignal(realtimePrice, prevClose) {
         const maKey = maSelectEl ? maSelectEl.value.toUpperCase() : 'MA20';
         renderTradeSignal(result, maKey);
         renderGridCardFromRealtime(result);
+        updateAdvice(result, maKey);
     } catch (e) {
         console.warn('实时信号计算失败:', e.message);
     }
@@ -460,8 +461,10 @@ async function loadStockData(code, startDate, endDate) {
 
         // 渲染图表和分析
         renderSummary(data);
-        renderSignals(data);
-        renderTradeSignal(data);
+        const maSelectEl = document.getElementById('gridMaSelect');
+        const maKey = maSelectEl ? maSelectEl.value.toUpperCase() : 'MA20';
+        renderSignals(data, maKey);
+        renderTradeSignal(data, maKey);
         renderGridCard(data);
         // 缓存数据供均线切换时直接重算
         _cachedData = data;
@@ -652,8 +655,8 @@ function renderSummary(data) {
 }
 
 // ========== 渲染：分析信号 ==========
-function renderSignals(data) {
-    const signals = data.signals || [];
+function renderSignals(data, maKey) {
+    const signals = (data.signals || []).filter(s => s[0] !== '网格信号');
     const signalGrid = document.getElementById('signalGrid');
     signalGrid.innerHTML = signals.map(s => {
         const isBullish = s[1].includes('✅') || s[1].includes('📈');
@@ -671,6 +674,13 @@ function renderSignals(data) {
         `;
     }).join('');
 
+updateAdvice(data, maKey);
+}
+
+// ========== 渲染：综合分析建议 ==========
+function updateAdvice(data, maKey) {
+    const signals = data.signals || [];
+
     let bullishCount = 0, bearishCount = 0;
     signals.forEach(s => {
         if (s[1].includes('✅') || s[1].includes('📈')) bullishCount++;
@@ -678,7 +688,8 @@ function renderSignals(data) {
     });
 
     const adviceEl = document.getElementById('finalAdvice');
-    const tradeSignal = data.trade_signal || '观望';
+    let tradeSignal = data.trade_signal || '观望';
+
     if (tradeSignal === '买入') {
         adviceEl.className = 'final-advice bullish';
         adviceEl.innerHTML = '<h3>📈 综合建议：短期偏多</h3><p>多个指标显示多方占优，但需注意KDJ超买风险。建议逢低布局，控制仓位，设定止损位。</p>';
@@ -854,6 +865,8 @@ function onMaChange() {
     renderGridCard(_cachedData);
     // 联动更新交易信号区域
     renderTradeSignal(_cachedData, maKey);
+    // 联动更新综合建议
+    updateAdvice(_cachedData, maKey);
 }
 
 async function loadNews(symbol) {
