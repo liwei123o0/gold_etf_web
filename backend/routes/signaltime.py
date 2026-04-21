@@ -1,21 +1,20 @@
 """
-实时信号接口
+FastAPI 实时信号接口
 
 接收实时价格，结合缓存的日线指标，重新计算交易信号。
 """
 
-from flask import Blueprint, jsonify, request
+from datetime import datetime
+from typing import Optional
 
-bp = Blueprint('signaltime', __name__)
-
-DEFAULT_SYMBOL = "sh518880"
+from backend.services.gold_data import get_full_data, generate_signals, get_grid_signal
 
 
 def normalize_symbol(raw: str) -> str:
     """将用户输入的股票代码规范化为带前缀的形式"""
     raw = (raw or '').strip()
     if not raw:
-        return DEFAULT_SYMBOL
+        return "sh518880"
     if raw.startswith(('sh', 'sz', 'bj')):
         return raw
     if len(raw) >= 4:
@@ -70,41 +69,37 @@ def _calc_change_pct(realtime_price: float, prev_close: float) -> float:
     return (realtime_price - prev_close) / prev_close * 100
 
 
-@bp.route('/api/signaltime', methods=['POST'])
-def api_signaltime():
-    """
-    接收实时价格，结合日线指标计算实时交易信号。
+def safe(val, default=0.0):
+    """安全取值"""
+    import pandas as pd
+    if pd.isna(val):
+        return default
+    return float(val)
 
-    Request Body (JSON):
-    {
-        "symbol": "sh518880",
-        "realtime_price": 10.025,
-        "prev_close": 10.029   // 可选，不传则从日线数据取
-    }
+
+def calc_signaltime(
+    symbol: str,
+    realtime_price: float,
+    prev_close: Optional[float] = None
+) -> dict:
+    """
+    计算实时交易信号
+
+    Args:
+        symbol: 股票代码
+        realtime_price: 实时价格
+        prev_close: 可选的昨收价
 
     Returns:
-        实时交易信号 + 信号明细 + 指标卡片数据
+        dict: 信号结果
     """
-    body = request.get_json()
-    if not body:
-        return jsonify({'error': '请求体不能为空'}), 400
-
-    symbol = normalize_symbol(body.get('symbol', DEFAULT_SYMBOL))
-    realtime_price = body.get('realtime_price')
-    prev_close_override = body.get('prev_close')
-
-    if not realtime_price or realtime_price <= 0:
-        return jsonify({'error': 'realtime_price 无效'}), 400
+    symbol = normalize_symbol(symbol)
 
     # 拿日线数据（含指标）
-    try:
-        from backend.services.gold_data import get_full_data
-        df = get_full_data(symbol=symbol, datalen=90)
-    except Exception as e:
-        return jsonify({'error': f'获取数据失败: {str(e)}'}), 500
+    df = get_full_data(symbol=symbol, datalen=90)
 
     if len(df) < 2:
-        return jsonify({'error': '数据不足'}), 400
+        return {"error": "数据不足"}
 
     # 取最新一行作为基础
     latest = df.iloc[-1].copy()
@@ -113,10 +108,9 @@ def api_signaltime():
     realtime_close = float(realtime_price)
 
     # 计算实时涨跌幅
-    if prev_close_override:
-        prev_close = float(prev_close_override)
+    if prev_close:
+        prev_close = float(prev_close)
     else:
-        # 取昨天收盘价（前一行收盘）
         prev_close = float(df.iloc[-2]['收盘']) if len(df) >= 2 else float(latest['收盘'])
 
     change_pct = _calc_change_pct(realtime_close, prev_close)
@@ -126,27 +120,18 @@ def api_signaltime():
     latest['涨跌幅'] = change_pct
 
     # 生成信号（用实时价格重新算）
-    from backend.services.gold_data import generate_signals
     signals = generate_signals(latest, df)
 
     # 计算实时交易信号
     trade_signal = _calc_trade_signal_from_latest(latest)
-
-    # 安全取值
-    def safe(val, default=0.0):
-        import pandas as pd
-        if pd.isna(val):
-            return default
-        return float(val)
 
     # 计算 MACD_HIST 历史均值
     macd_hist_window = 20
     macd_hist_mean = df['MACD_HIST'].iloc[-macd_hist_window:].mean() if len(df) >= macd_hist_window else df['MACD_HIST'].mean()
 
     # 生成网格信号（用实时价格）
-    from backend.services.gold_data import get_grid_signal
     grid_signals = {
-        'MA5':  get_grid_signal(latest, ma_key='MA5'),
+        'MA5': get_grid_signal(latest, ma_key='MA5'),
         'MA10': get_grid_signal(latest, ma_key='MA10'),
         'MA20': get_grid_signal(latest, ma_key='MA20'),
         'MA60': get_grid_signal(latest, ma_key='MA60'),
@@ -157,7 +142,7 @@ def api_signaltime():
     }
     grid_signal = get_grid_signal(latest, ma_key='MA20')
 
-    return jsonify({
+    return {
         'code': 0,
         'msg': 'success',
         'symbol': symbol,
@@ -185,4 +170,4 @@ def api_signaltime():
             'BB_LOWER': safe(latest.get('BB_LOWER', 0)),
             'ATR': safe(latest.get('ATR', 0)),
         }
-    })
+    }

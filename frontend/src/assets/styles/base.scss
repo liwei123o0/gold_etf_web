@@ -1,0 +1,81 @@
+:root {
+  --bg-primary: #050810;
+  --bg-card: rgba(10, 15, 30, 0.85);
+  --border-color: rgba(102, 126, 234, 0.2);
+  --border-active: rgba(0, 242, 255, 0.6);
+  --text-primary: #e8eaf6;
+  --text-secondary: #7986cb;
+  --text-muted: #3d4466;
+  --accent-cyan: #00f2ff;
+  --accent-purple: #667eea;
+  --accent-pink: #f72585;
+  --glow-cyan: rgba(0, 242, 255, 0.15);
+  --glow-purple: rgba(102, 126, 234, 0.15);
+  --error-color: #ff5370;
+  --success-color: #00f2ff;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--accent-purple);
+  text-decoration: none;
+  transition: color 0.2s;
+
+  &:hover {
+    color: var(--accent-cyan);
+  }
+}
+
+input {
+  outline: none;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--accent-purple);
+  color: var(--text-primary);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+
+  &:hover {
+    background: var(--accent-purple);
+  }
+}
