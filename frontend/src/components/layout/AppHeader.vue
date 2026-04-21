@@ -10,7 +10,7 @@ const { currentTime } = useClock()
   <header class="app-header">
     <div class="header-left">
       <span class="clock">{{ currentTime }}</span>
-      <span class="header-title">黄金ETF技术分析系统</span>
+      <span class="header-title">股票技术分析系统</span>
     </div>
     <div class="header-right">
       <template v-if="user">
