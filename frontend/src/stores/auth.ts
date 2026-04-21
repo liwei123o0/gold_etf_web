@@ -2,9 +2,12 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authService, type User } from '@/services/authService'
 
+const storedUser = localStorage.getItem('user')
+const storedToken = localStorage.getItem('token')
+
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref<User | null>(null)
-  const token = ref<string | null>(localStorage.getItem('token'))
+  const user = ref<User | null>(storedUser ? JSON.parse(storedUser) : null)
+  const token = ref<string | null>(storedToken)
   const loading = ref(false)
 
   const isAuthenticated = computed(() => !!token.value && !!user.value)

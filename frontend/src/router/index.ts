@@ -35,11 +35,27 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach(async () => {
+router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+
+  // 如果有 token 但没有 user，先获取用户信息
   if (authStore.token && !authStore.user) {
     await authStore.fetchUser()
   }
+
+  // 需要登录的路由
+  if (to.meta.requiresAuth) {
+    if (!authStore.isAuthenticated) {
+      return next('/auth/login')
+    }
+  }
+
+  // 游客路由（登录/注册）已登录则跳转到 stock
+  if (to.meta.guest && authStore.isAuthenticated) {
+    return next('/stock')
+  }
+
+  next()
 })
 
 export default router
