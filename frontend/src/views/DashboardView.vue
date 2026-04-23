@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import type { IChartApi } from 'lightweight-charts'
 import { useAuth } from '@/composables/useAuth'
 import { useStockStore } from '@/stores/stock'
 import { stockService } from '@/services/stockService'
@@ -22,6 +23,7 @@ const stockStore = useStockStore()
 const selectedMa = ref('MA20')
 const realtimeInterval = ref(60000)
 let realtimeTimer: number | null = null
+const mainChartRef = ref<{ chart: () => IChartApi | null } | null>(null)
 
 const realtimeData = computed(() => stockStore.realtimeData)
 const changePct = computed(() => realtimeData.value?.change_pct)
@@ -123,12 +125,12 @@ onUnmounted(() => {
         :end-date="stockStore.endDate"
       />
 
-      <CandlestickChart :data="stockDataForCharts" />
+      <CandlestickChart ref="mainChartRef" :data="stockDataForCharts" :realtime="stockStore.realtimeData" />
 
       <div class="charts-grid">
-        <MacdChart :data="stockDataForCharts" />
-        <KdjChart :data="stockDataForCharts" />
-        <VolumeChart :data="stockDataForCharts" />
+        <MacdChart :data="stockDataForCharts" :sync-chart="mainChartRef?.chart() ?? null" :realtime="stockStore.realtimeData" />
+        <KdjChart :data="stockDataForCharts" :sync-chart="mainChartRef?.chart() ?? null" :realtime="stockStore.realtimeData" />
+        <VolumeChart :data="stockDataForCharts" :sync-chart="mainChartRef?.chart() ?? null" :realtime="stockStore.realtimeData" />
       </div>
 
       <NewsSection

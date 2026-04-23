@@ -1,92 +1,103 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { useECharts } from '@/composables/useECharts'
+import { createChart, type IChartApi, ColorType, HistogramSeries } from 'lightweight-charts'
+import type { ISeriesApi } from 'lightweight-charts'
 import type { StockDataResponse } from '@/services/stockService'
 
 const props = defineProps<{
   data?: StockDataResponse
+  syncChart?: IChartApi | null
 }>()
 
-const chartContainer = ref<HTMLElement | null>(null)
-const { initChart, setOption, resize, dispose } = useECharts(chartContainer)
+const container = ref<HTMLElement | null>(null)
+let chart: IChartApi | null = null
+let volumeSeries: ISeriesApi<'Histogram'> | null = null
 
-function buildChartOption() {
-  if (!props.data) return null
-
-  const { dates, kdata, volume } = props.data
-
-  const volumeColors = kdata.map(d => d[1] >= d[0] ? '#ef5350' : '#26a69a')
-
-  return {
-    animation: false,
-    tooltip: {
-      trigger: 'axis' as const,
-      axisPointer: { type: 'cross' as const }
-    },
-    legend: {
-      data: ['成交量'],
-      top: 10,
-      textStyle: { color: '#7986cb' }
-    },
-    grid: {
-      left: '10%',
-      right: '10%',
-      top: '15%',
-      bottom: '15%'
-    },
-    xAxis: {
-      type: 'category' as const,
-      data: dates,
-      axisLine: { lineStyle: { color: '#333' } },
-      axisLabel: { color: '#7986cb', show: false }
-    },
-    yAxis: {
-      type: 'value' as const,
-      axisLine: { lineStyle: { color: '#333' } },
-      axisLabel: { color: '#7986cb' },
-      splitLine: { lineStyle: { color: '#222' } }
-    },
-    dataZoom: [
-      { type: 'inside' as const, start: 70, end: 100 }
-    ],
-    series: [
-      {
-        name: '成交量',
-        type: 'bar' as const,
-        data: volume.map((v, i) => ({
-          value: v,
-          itemStyle: { color: volumeColors[i] }
-        }))
-      }
-    ]
-  }
+function parseDate(dateStr: string): number {
+  return Math.floor(new Date(dateStr).getTime() / 1000)
 }
 
-watch(() => props.data, () => {
-  if (props.data) {
-    const option = buildChartOption()
-    if (option) setOption(option)
+function buildChartData() {
+  if (!props.data) return
+  const { dates, kdata, volume } = props.data
+
+  volumeSeries?.setData(kdata.map((d, i) => ({
+    time: parseDate(dates[i]) as any,
+    value: volume[i],
+    color: d[1] >= d[0] ? 'rgba(239, 83, 80, 0.5)' : 'rgba(38, 166, 154, 0.5)'
+  })))
+
+  chart?.timeScale().fitContent()
+}
+
+function initChart() {
+  if (!container.value) return
+
+  chart = createChart(container.value, {
+    layout: {
+      background: { type: ColorType.Solid, color: 'transparent' },
+      textColor: '#7986cb'
+    },
+    grid: {
+      vertLines: { color: '#222' },
+      horzLines: { color: '#222' }
+    },
+    crosshair: { mode: 1 },
+    timeScale: {
+      borderColor: '#333',
+      timeVisible: false,
+      visible: false
+    },
+    rightPriceScale: { borderColor: '#333' },
+    handleScroll: true,
+    handleScale: true
+  })
+
+  volumeSeries = chart.addSeries(HistogramSeries, {
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'right'
+  })
+
+  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: 0 } })
+
+  const handleResize = () => {
+    if (container.value) chart?.applyOptions({ width: container.value.clientWidth, height: container.value.clientHeight })
   }
-}, { deep: true })
+  window.addEventListener('resize', handleResize)
+  handleResize()
+}
 
 onMounted(() => {
   initChart()
-  if (props.data) {
-    const option = buildChartOption()
-    if (option) setOption(option)
-  }
-  window.addEventListener('resize', resize)
+  if (props.data) buildChartData()
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', resize)
-  dispose()
+  chart?.remove()
+  chart = null
 })
+
+watch(() => props.data, () => {
+  if (props.data && chart) buildChartData()
+}, { immediate: true, deep: true })
+
+watch(() => props.syncChart, (syncChart) => {
+  if (!syncChart || !chart) return
+  syncChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (range) chart?.timeScale().setVisibleLogicalRange(range)
+  })
+  chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (range) syncChart.timeScale().setVisibleLogicalRange(range)
+  })
+}, { immediate: true })
+
+defineExpose({ chart: () => chart })
 </script>
 
 <template>
   <div class="chart-wrapper">
-    <div ref="chartContainer" class="chart-container"></div>
+    <div class="chart-title">成交量</div>
+    <div ref="container" class="chart-container"></div>
   </div>
 </template>
 
@@ -97,9 +108,14 @@ onUnmounted(() => {
   border-radius: 12px;
   padding: 16px;
 }
-
+.chart-title {
+  color: #7986cb;
+  font-size: 13px;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
 .chart-container {
   width: 100%;
-  height: 200px;
+  height: 140px;
 }
 </style>
