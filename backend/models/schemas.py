@@ -228,3 +228,70 @@ class BacktestResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
+
+# ==================== Simulation Trading ====================
+
+class Position(BaseModel):
+    symbol: str
+    name: str
+    shares: int
+    avg_cost: float
+    current_price: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+
+
+class Account(BaseModel):
+    initial_capital: float
+    cash: float
+    frozen_cash: float
+    market_value: float
+    total_assets: float
+    unrealized_pnl: float
+    realized_pnl: float
+    total_pnl: float
+
+
+class SimOrder(BaseModel):
+    id: str
+    direction: str
+    symbol: str
+    name: str
+    price: float
+    shares: int
+    commission: float
+    timestamp: str
+    pnl: float = 0
+
+
+class SimulationPortfolio(BaseModel):
+    account: Account
+    positions: List[Position]
+    orders: List[SimOrder]
+    total_return: float = 0
+    total_return_pct: float = 0
+
+
+class SimulationOrderRequest(BaseModel):
+    user_id: int
+    direction: str
+    symbol: str
+    name: str
+    price: float
+    shares: int
+
+
+class SimulationCloseRequest(BaseModel):
+    user_id: int
+
+
+class SimulationResetRequest(BaseModel):
+    user_id: int
+    initial_capital: float = 100000.0
+
+
+class SimulationOrderResponse(BaseModel):
+    success: bool
+    error: Optional[str] = None
+    order: Optional[SimOrder] = None
+    portfolio: Optional[SimulationPortfolio] = None

@@ -11,6 +11,10 @@ const { currentTime } = useClock()
     <div class="header-left">
       <span class="clock">{{ currentTime }}</span>
       <span class="header-title">股票技术分析系统</span>
+      <nav class="header-nav">
+        <router-link to="/stock" class="nav-link">看板</router-link>
+        <router-link to="/simulation" class="nav-link">模拟交易</router-link>
+      </nav>
     </div>
     <div class="header-right">
       <template v-if="user">
@@ -57,6 +61,30 @@ const { currentTime } = useClock()
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+.header-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.nav-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  transition: all 0.2s;
+
+  &:hover {
+    color: var(--accent-cyan);
+    background: rgba(0, 242, 255, 0.1);
+  }
+
+  &.router-link-active {
+    color: var(--accent-cyan);
+    background: rgba(0, 242, 255, 0.15);
+  }
 }
 
 .header-right {

@@ -167,6 +167,47 @@ export interface BacktestRequest {
   base_ma_key: string
 }
 
+export interface SimulationAccount {
+  initial_capital: number
+  cash: number
+  frozen_cash: number
+  market_value: number
+  total_assets: number
+  unrealized_pnl: number
+  realized_pnl: number
+  total_pnl: number
+}
+
+export interface SimulationPosition {
+  symbol: string
+  name: string
+  shares: number
+  avg_cost: number
+  current_price: number
+  unrealized_pnl: number
+  unrealized_pnl_pct: number
+}
+
+export interface SimulationOrder {
+  id: string
+  direction: string
+  symbol: string
+  name: string
+  price: number
+  shares: number
+  commission: number
+  timestamp: string
+  pnl: number
+}
+
+export interface SimulationPortfolio {
+  account: SimulationAccount
+  positions: SimulationPosition[]
+  orders: SimulationOrder[]
+  total_return: number
+  total_return_pct: number
+}
+
 export interface BacktestResponse {
   initial_capital: number
   final_equity: number
@@ -208,6 +249,38 @@ export const stockService = {
 
   async runBacktest(data: BacktestRequest): Promise<BacktestResponse> {
     const response = await api.post<BacktestResponse>('/backtest', data)
+    return response.data
+  },
+
+  async runSimulation(data: BacktestRequest): Promise<BacktestResponse> {
+    const response = await api.post<BacktestResponse>('/simulation', data)
+    return response.data
+  },
+
+  async resetSimulation(userId: number, initialCapital: number): Promise<SimulationPortfolio> {
+    const response = await api.post<SimulationPortfolio>('/simulation/reset', { user_id: userId, initial_capital: initialCapital })
+    return response.data
+  },
+
+  async placeSimulationOrder(userId: number, direction: string, symbol: string, name: string, price: number, shares: number): Promise<any> {
+    const response = await api.post<any>('/simulation/order', {
+      user_id: userId,
+      direction,
+      symbol,
+      name,
+      price,
+      shares
+    })
+    return response.data
+  },
+
+  async getSimulationPortfolio(): Promise<SimulationPortfolio> {
+    const response = await api.get<SimulationPortfolio>('/simulation/portfolio')
+    return response.data
+  },
+
+  async closeAllPositions(userId: number): Promise<any> {
+    const response = await api.post<any>('/simulation/close', { user_id: userId })
     return response.data
   }
 }

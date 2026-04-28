@@ -265,6 +265,46 @@ async def post_backtest(request: BacktestRequest):
         raise HTTPException(status_code=500, detail=f"回测执行失败: {str(e)}")
 
 
+# ==================== 模拟交易 ====================
+
+@app.post("/api/simulation", response_model=BacktestResponse, tags=["模拟交易"])
+async def post_simulation(request: BacktestRequest):
+    """运行网格交易模拟（与回测共用同一算法）"""
+    from backend.services.backtest import run_grid_backtest
+    from backend.services.gold_data import get_full_data
+
+    try:
+        if request.grid_count not in [5, 10, 15, 20]:
+            raise HTTPException(status_code=400, detail="grid_count 必须是 5/10/15/20 之一")
+        if request.spread_type not in ["fixed", "atr"]:
+            raise HTTPException(status_code=400, detail="spread_type 必须是 fixed 或 atr")
+        if request.base_ma_key not in ["MA5", "MA10", "MA20", "MA60"]:
+            raise HTTPException(status_code=400, detail="base_ma_key 无效")
+
+        df = get_full_data(
+            symbol=request.symbol,
+            start_date=request.start_date,
+            end_date=request.end_date
+        )
+
+        if len(df) < 30:
+            raise HTTPException(status_code=400, detail="数据不足，无法模拟")
+
+        result = run_grid_backtest(
+            df=df,
+            initial_capital=request.initial_capital,
+            grid_count=request.grid_count,
+            spread_type=request.spread_type,
+            base_ma_key=request.base_ma_key
+        )
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"模拟执行失败: {str(e)}")
+
+
 # ==================== 启动信息 ====================
 
 @app.on_event("startup")
@@ -273,6 +313,107 @@ async def startup_event():
     print("黄金ETF技术分析系统 API v2.0")
     print("FastAPI backend started")
     print("=" * 50)
+
+
+# ==================== Simulation Trading APIs ====================
+
+from backend.models.schemas import (
+    SimulationOrderRequest,
+    SimulationResetRequest,
+    SimulationCloseRequest,
+    SimulationPortfolio,
+    SimulationOrderResponse,
+    Position,
+    Account,
+    SimOrder,
+)
+from backend.services import simulation_trade as st
+
+@app.post("/api/simulation/reset", response_model=SimulationPortfolio, tags=["模拟交易"])
+async def reset_simulation(request: SimulationResetRequest):
+    """重置模拟账户"""
+    try:
+        portfolio = st.reset_portfolio(request.user_id, request.initial_capital)
+        return SimulationPortfolio(
+            account=Account(**portfolio["account"]),
+            positions=[Position(**p) for p in portfolio["positions"]],
+            orders=[SimOrder(**o) for o in portfolio["orders"]]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/simulation/order", response_model=SimulationOrderResponse, tags=["模拟交易"])
+async def place_order(request: SimulationOrderRequest):
+    """下单买入或卖出"""
+    try:
+        result = st.execute_trade(
+            request.user_id,
+            request.direction,
+            request.symbol,
+            request.name,
+            request.price,
+            request.shares
+        )
+        if not result["success"]:
+            return SimulationOrderResponse(success=False, error=result["error"])
+        
+        order = result["order"]
+        portfolio = result["portfolio"]
+        return SimulationOrderResponse(
+            success=True,
+            order=SimOrder(**order),
+            portfolio=SimulationPortfolio(
+                account=Account(**portfolio["account"]),
+                positions=[Position(**p) for p in portfolio["positions"]],
+                orders=[SimOrder(**o) for o in portfolio["orders"][:20]]
+            )
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/simulation/portfolio", response_model=SimulationPortfolio, tags=["模拟交易"])
+async def get_portfolio(authorization: Optional[str] = Header(None)):
+    """获取当前账户持仓"""
+    try:
+        user_info = None
+        if authorization and authorization.startswith("Bearer "):
+            user_info = get_current_user(authorization[7:])
+        if not user_info:
+            raise HTTPException(status_code=401, detail="未登录")
+        
+        portfolio = st.get_portfolio(user_info["user_id"])
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="账户不存在")
+        
+        return SimulationPortfolio(
+            account=Account(**portfolio["account"]),
+            positions=[Position(**p) for p in portfolio["positions"]],
+            orders=[SimOrder(**o) for o in portfolio["orders"][:20]]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/simulation/close", response_model=SimulationOrderResponse, tags=["模拟交易"])
+async def close_positions(request: SimulationCloseRequest):
+    """清仓"""
+    try:
+        result = st.close_all_positions(request.user_id)
+        if not result["success"]:
+            return SimulationOrderResponse(success=False, error=result["error"])
+        
+        portfolio = result["portfolio"]
+        return SimulationOrderResponse(
+            success=True,
+            portfolio=SimulationPortfolio(
+                account=Account(**portfolio["account"]),
+                positions=[Position(**p) for p in portfolio["positions"]],
+                orders=[SimOrder(**o) for o in portfolio["orders"][:20]]
+            )
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
