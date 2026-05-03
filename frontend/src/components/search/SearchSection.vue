@@ -1,24 +1,15 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { normalizeSymbol, formatDate } from '@/utils/symbol'
 
 const emit = defineEmits<{
   search: [symbol: string, startDate: string | null, endDate: string | null]
-  intervalChange: [ms: number]
 }>()
 
 const stockCode = ref('')
 const startDate = ref('')
 const endDate = ref('')
-const selectedInterval = ref(60000)
 const activeQuickBtn = ref(3)
-
-const intervals = [
-  { label: '15秒', value: 15000 },
-  { label: '30秒', value: 30000 },
-  { label: '1分钟', value: 60000 },
-  { label: '手动', value: 0 }
-]
 
 function setDateRange(months: number) {
   activeQuickBtn.value = months
@@ -33,10 +24,6 @@ function setDateRange(months: number) {
 function doSearch() {
   const symbol = normalizeSymbol(stockCode.value || 'sh518880')
   emit('search', symbol, startDate.value || null, endDate.value || null)
-}
-
-function onIntervalChange() {
-  emit('intervalChange', selectedInterval.value)
 }
 
 // Initialize with 3 months
@@ -81,15 +68,6 @@ setDateRange(3)
       >
         {{ btn === 1 ? '近1月' : btn === 12 ? '近1年' : `近${btn}月` }}
       </button>
-    </div>
-
-    <div class="realtime-options">
-      <span class="quick-label">刷新频率：</span>
-      <select v-model="selectedInterval" class="interval-select" @change="onIntervalChange">
-        <option v-for="opt in intervals" :key="opt.value" :value="opt.value">
-          {{ opt.label }}
-        </option>
-      </select>
     </div>
   </div>
 </template>
@@ -166,8 +144,7 @@ setDateRange(3)
   }
 }
 
-.quick-dates,
-.realtime-options {
+.quick-dates {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -193,25 +170,6 @@ setDateRange(3)
   &.active {
     border-color: var(--accent-purple);
     color: var(--accent-purple);
-  }
-}
-
-.interval-select {
-  padding: 4px 28px 4px 10px;
-  background: rgba(20, 25, 45, 0.95);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 12px;
-  cursor: pointer;
-  outline: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%237986cb' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-
-  &:focus {
-    border-color: var(--accent-purple);
   }
 }
 </style>

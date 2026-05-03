@@ -40,10 +40,10 @@ const showDetails = ref(false)
             <td>{{ t.exit_price.toFixed(3) }}</td>
             <td>{{ t.exit_grid }}</td>
             <td>{{ t.shares }}</td>
-            <td :style="{ color: t.pnl >= 0 ? '#26a69a' : '#ef5350' }">
+            <td :style="{ color: t.pnl >= 0 ? '#ef5350' : '#26a69a' }">
               {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl.toFixed(2) }}
             </td>
-            <td :style="{ color: t.pnl_pct >= 0 ? '#26a69a' : '#ef5350' }">
+            <td :style="{ color: t.pnl_pct >= 0 ? '#ef5350' : '#26a69a' }">
               {{ t.pnl_pct >= 0 ? '+' : '' }}{{ (t.pnl_pct * 100).toFixed(2) }}%
             </td>
           </tr>

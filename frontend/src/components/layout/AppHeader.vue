@@ -14,6 +14,7 @@ const { currentTime } = useClock()
       <nav class="header-nav">
         <router-link to="/stock" class="nav-link">看板</router-link>
         <router-link to="/simulation" class="nav-link">模拟交易</router-link>
+        <router-link to="/settings" class="nav-link">系统设置</router-link>
       </nav>
     </div>
     <div class="header-right">

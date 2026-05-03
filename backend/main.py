@@ -402,7 +402,7 @@ async def close_positions(request: SimulationCloseRequest):
         result = st.close_all_positions(request.user_id)
         if not result["success"]:
             return SimulationOrderResponse(success=False, error=result["error"])
-        
+
         portfolio = result["portfolio"]
         return SimulationOrderResponse(
             success=True,
@@ -414,6 +414,159 @@ async def close_positions(request: SimulationCloseRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/simulation/orders/clear", tags=["模拟交易"])
+async def clear_orders(authorization: Optional[str] = Header(None)):
+    """清空成交记录"""
+    try:
+        user_info = None
+        if authorization and authorization.startswith("Bearer "):
+            user_info = get_current_user(authorization[7:])
+        if not user_info:
+            raise HTTPException(status_code=401, detail="未登录")
+        st.clear_orders(user_info["user_id"])
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Settings APIs ====================
+
+from backend.models.settings import SimSettings
+
+@app.get("/api/settings", tags=["系统设置"])
+async def get_settings():
+    """获取默认手续费设置"""
+    return SimSettings.get()
+
+@app.put("/api/settings", tags=["系统设置"])
+async def update_settings(request: dict):
+    """更新默认手续费设置"""
+    settings = SimSettings.update(
+        commission_rate=float(request.get("commission_rate", 0.0003)),
+        min_commission=float(request.get("min_commission", 5.0)),
+        stamp_tax_rate=float(request.get("stamp_tax_rate", 0.001)),
+        transfer_fee_rate=float(request.get("transfer_fee_rate", 0.00002)),
+    )
+    return settings
+
+@app.get("/api/settings/symbols", tags=["系统设置"])
+async def get_all_symbol_settings():
+    """获取所有单票手续费设置"""
+    return SimSettings.get_all_symbol_settings()
+
+@app.get("/api/settings/symbol/{symbol}", tags=["系统设置"])
+async def get_symbol_settings(symbol: str):
+    """获取指定证券的手续费设置（包含默认值）"""
+    return {"symbol": symbol, **SimSettings.get(symbol)}
+
+@app.put("/api/settings/symbol/{symbol}", tags=["系统设置"])
+async def upsert_symbol_settings(symbol: str, request: dict):
+    """设置单票手续费（None表示使用默认）"""
+    result = SimSettings.upsert_symbol_settings(
+        symbol,
+        commission_rate=float(request["commission_rate"]) if request.get("commission_rate") is not None else None,
+        min_commission=float(request["min_commission"]) if request.get("min_commission") is not None else None,
+        stamp_tax_rate=float(request["stamp_tax_rate"]) if request.get("stamp_tax_rate") is not None else None,
+        transfer_fee_rate=float(request["transfer_fee_rate"]) if request.get("transfer_fee_rate") is not None else None,
+    )
+    return {"symbol": symbol, **result}
+
+@app.delete("/api/settings/symbol/{symbol}", tags=["系统设置"])
+async def delete_symbol_settings(symbol: str):
+    """删除单票手续费设置，恢复默认"""
+    SimSettings.delete_symbol_settings(symbol)
+    return {"symbol": symbol, **SimSettings.get()}
+
+
+# ==================== Auto Trade APIs (multi-task) ====================
+
+from backend.services.auto_trade import AutoTradeService
+
+def _get_user(authorization: Optional[str]):
+    if authorization and authorization.startswith("Bearer "):
+        return get_current_user(authorization[7:])
+    return None
+
+@app.get("/api/autotrade/tasks", tags=["自动交易"])
+async def get_autotrade_tasks(authorization: Optional[str] = Header(None)):
+    """获取用户所有自动交易任务"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    return AutoTradeService.get_all_status(user_info["user_id"])
+
+@app.post("/api/autotrade/tasks", tags=["自动交易"])
+async def create_autotrade_task(request: dict, authorization: Optional[str] = Header(None)):
+    """新增自动交易任务"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    symbol = request.get("symbol", "").strip().lower()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="证券代码不能为空")
+    result = await AutoTradeService.add_task(user_info["user_id"], symbol, request)
+    return result
+
+@app.delete("/api/autotrade/tasks/{symbol}", tags=["自动交易"])
+async def delete_autotrade_task(symbol: str, authorization: Optional[str] = Header(None)):
+    """删除自动交易任务"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    result = await AutoTradeService.delete_task(user_info["user_id"], symbol.lower())
+    return result
+
+@app.put("/api/autotrade/tasks/{symbol}", tags=["自动交易"])
+async def update_autotrade_task(symbol: str, request: dict, authorization: Optional[str] = Header(None)):
+    """更新自动交易任务配置"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    result = AutoTradeService.update_task_config(user_info["user_id"], symbol.lower(), request)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "任务不存在"))
+    return result
+
+@app.post("/api/autotrade/tasks/{symbol}/start", tags=["自动交易"])
+async def start_autotrade_task(symbol: str, authorization: Optional[str] = Header(None)):
+    """启动单个自动交易任务"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    result = await AutoTradeService.start_task(user_info["user_id"], symbol.lower())
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "启动失败"))
+    return result
+
+@app.post("/api/autotrade/tasks/{symbol}/stop", tags=["自动交易"])
+async def stop_autotrade_task(symbol: str, authorization: Optional[str] = Header(None)):
+    """停止单个自动交易任务"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    result = await AutoTradeService.stop_task(user_info["user_id"], symbol.lower())
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "停止失败"))
+    return result
+
+@app.post("/api/autotrade/tasks/start-all", tags=["自动交易"])
+async def start_all_autotrade_tasks(authorization: Optional[str] = Header(None)):
+    """启动所有自动交易任务"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    return await AutoTradeService.start_all_tasks(user_info["user_id"])
+
+@app.post("/api/autotrade/tasks/stop-all", tags=["自动交易"])
+async def stop_all_autotrade_tasks(authorization: Optional[str] = Header(None)):
+    """停止所有自动交易任务"""
+    user_info = _get_user(authorization)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="未登录")
+    return await AutoTradeService.stop_all_tasks(user_info["user_id"])
 
 
 if __name__ == "__main__":

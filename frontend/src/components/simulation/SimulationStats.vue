@@ -9,7 +9,7 @@ const { portfolio } = storeToRefs(simStore)
 const account = computed(() => portfolio.value?.account ?? null)
 const returnColor = computed(() => {
   if (!account.value) return '#7986cb'
-  return account.value.total_pnl >= 0 ? '#26a69a' : '#ef5350'
+  return account.value.total_pnl >= 0 ? '#ef5350' : '#26a69a'
 })
 const returnSign = computed(() => {
   if (!account.value) return ''
@@ -59,13 +59,13 @@ async function handleReset() {
     </div>
     <div class="stat-card">
       <span class="stat-label">浮动盈亏</span>
-      <span class="stat-value" :style="{ color: account && account.unrealized_pnl >= 0 ? '#26a69a' : '#ef5350' }">
+      <span class="stat-value" :style="{ color: account && account.unrealized_pnl >= 0 ? '#ef5350' : '#26a69a' }">
         {{ account ? (account.unrealized_pnl >= 0 ? '+' : '') + account.unrealized_pnl.toFixed(2) : '--' }}
       </span>
     </div>
     <div class="stat-card">
       <span class="stat-label">已实现盈亏</span>
-      <span class="stat-value" :style="{ color: account && account.realized_pnl >= 0 ? '#26a69a' : '#ef5350' }">
+      <span class="stat-value" :style="{ color: account && account.realized_pnl >= 0 ? '#ef5350' : '#26a69a' }">
         {{ account ? (account.realized_pnl >= 0 ? '+' : '') + account.realized_pnl.toFixed(2) : '--' }}
       </span>
     </div>

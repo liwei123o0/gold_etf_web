@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import type { IChartApi } from 'lightweight-charts'
 import { useAuth } from '@/composables/useAuth'
 import { useStockStore } from '@/stores/stock'
+import { useGlobalSettings } from '@/composables/useGlobalSettings'
 import { stockService } from '@/services/stockService'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import SearchSection from '@/components/search/SearchSection.vue'
@@ -19,9 +20,10 @@ import NewsSection from '@/components/news/NewsSection.vue'
 
 const { user } = useAuth()
 const stockStore = useStockStore()
+const { settings: globalSettings, updateSetting } = useGlobalSettings()
 
 const selectedMa = ref('MA20')
-const realtimeInterval = ref(60000)
+const realtimeInterval = computed(() => globalSettings.value.realtimeInterval)
 let realtimeTimer: number | null = null
 const mainChartRef = ref<{ chart: () => IChartApi | null } | null>(null)
 
@@ -34,16 +36,6 @@ async function handleSearch(symbol: string, startDate: string | null, endDate: s
   await stockStore.loadStockData(symbol, startDate || undefined, endDate || undefined)
   await stockStore.loadNews(symbol)
   startRealtimePolling()
-}
-
-function handleIntervalChange(ms: number) {
-  realtimeInterval.value = ms
-  stockStore.setRealtimeInterval(ms)
-  if (ms > 0) {
-    startRealtimePolling()
-  } else {
-    stopRealtimePolling()
-  }
 }
 
 async function loadRealtime() {
@@ -90,7 +82,6 @@ onUnmounted(() => {
     <main class="main-content">
       <SearchSection
         @search="handleSearch"
-        @interval-change="handleIntervalChange"
       />
 
       <SignalBar

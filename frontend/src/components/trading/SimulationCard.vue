@@ -55,7 +55,7 @@ const returnClass = computed(() => {
 
 const returnColor = computed(() => {
   if (!result.value) return 'var(--text-primary)'
-  return result.value.total_return_pct >= 0 ? '#26a69a' : '#ef5350'
+  return result.value.total_return_pct >= 0 ? '#ef5350' : '#26a69a'
 })
 
 async function runBacktest() {

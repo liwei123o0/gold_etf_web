@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useSimulationStore } from '@/stores/simulation'
-import { useStockStore } from '@/stores/stock'
 import { storeToRefs } from 'pinia'
 
 const simStore = useSimulationStore()
-const stockStore = useStockStore()
 const { realtimePrices } = storeToRefs(simStore)
 
-const symbol = ref('sh518880')
+const symbol = ref(simStore.currentSymbol)
 const direction = ref<'buy' | 'sell'>('buy')
 const shares = ref(100)
 const priceMode = ref<'realtime' | 'custom'>('realtime')
@@ -29,7 +27,8 @@ const orderAmount = computed(() => effectivePrice.value * shares.value)
 // Load realtime when symbol changes
 watch(() => symbol.value, async (sym) => {
   if (sym) {
-    await stockStore.loadRealtime(sym)
+    simStore.currentSymbol = sym
+    await simStore.updateRealtime([sym])
   }
 }, { immediate: true })
 

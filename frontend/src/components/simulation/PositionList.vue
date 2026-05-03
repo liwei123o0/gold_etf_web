@@ -6,7 +6,7 @@ import { storeToRefs } from 'pinia'
 const simStore = useSimulationStore()
 const { positions } = storeToRefs(simStore)
 
-const posColor = (pnl: number) => pnl >= 0 ? '#26a69a' : '#ef5350'
+const posColor = (pnl: number) => pnl >= 0 ? '#ef5350' : '#26a69a'
 const posSign = (pnl: number) => pnl >= 0 ? '+' : ''
 
 async function closePosition(symbol: string, shares: number, price: number, name: string) {

@@ -198,6 +198,7 @@ export interface SimulationOrder {
   commission: number
   timestamp: string
   pnl: number
+  trade_type: string
 }
 
 export interface SimulationPortfolio {
@@ -282,5 +283,144 @@ export const stockService = {
   async closeAllPositions(userId: number): Promise<any> {
     const response = await api.post<any>('/simulation/close', { user_id: userId })
     return response.data
+  },
+
+  async clearOrders(): Promise<any> {
+    const response = await api.post<any>('/simulation/orders/clear', {})
+    return response.data
+  },
+
+  async getSettings(): Promise<SimSettings> {
+    const response = await api.get<SimSettings>('/settings')
+    return response.data
+  },
+
+  async updateSettings(settings: SimSettings): Promise<SimSettings> {
+    const response = await api.put<SimSettings>('/settings', settings)
+    return response.data
+  },
+
+  async getSymbolSettings(symbol: string): Promise<SimSettings & { symbol: string }> {
+    const response = await api.get<SimSettings & { symbol: string }>(`/settings/symbol/${symbol}`)
+    return response.data
+  },
+
+  async getAllSymbolSettings(): Promise<Array<SimSettings & { symbol: string }>> {
+    const response = await api.get<Array<SimSettings & { symbol: string }>>('/settings/symbols')
+    return response.data
+  },
+
+  async upsertSymbolSettings(symbol: string, settings: Partial<SimSettings>): Promise<SimSettings & { symbol: string }> {
+    const response = await api.put<SimSettings & { symbol: string }>(`/settings/symbol/${symbol}`, settings)
+    return response.data
+  },
+
+  async deleteSymbolSettings(symbol: string): Promise<SimSettings & { symbol: string }> {
+    const response = await api.delete<SimSettings & { symbol: string }>(`/settings/symbol/${symbol}`)
+    return response.data
+  },
+
+  // ==================== Auto Trade (multi-task) ====================
+
+  async getAutoTradeTasks(): Promise<TaskStatus[]> {
+    const response = await api.get<TaskStatus[]>('/autotrade/tasks')
+    return response.data
+  },
+
+  async addAutoTradeTask(task: Partial<AutoTradeTask>): Promise<TaskStatus> {
+    const response = await api.post<TaskStatus>('/autotrade/tasks', task)
+    return response.data
+  },
+
+  async updateAutoTradeTask(symbol: string, config: Partial<AutoTradeTask>): Promise<TaskStatus> {
+    const response = await api.put<TaskStatus>(`/autotrade/tasks/${symbol}`, config)
+    return response.data
+  },
+
+  async deleteAutoTradeTask(symbol: string): Promise<any> {
+    const response = await api.delete<any>(`/autotrade/tasks/${symbol}`)
+    return response.data
+  },
+
+  async startAutoTradeTask(symbol: string): Promise<any> {
+    const response = await api.post<any>(`/autotrade/tasks/${symbol}/start`, {})
+    return response.data
+  },
+
+  async stopAutoTradeTask(symbol: string): Promise<any> {
+    const response = await api.post<any>(`/autotrade/tasks/${symbol}/stop`, {})
+    return response.data
+  },
+
+  async startAllAutoTradeTasks(): Promise<any> {
+    const response = await api.post<any>('/autotrade/tasks/start-all', {})
+    return response.data
+  },
+
+  async stopAllAutoTradeTasks(): Promise<any> {
+    const response = await api.post<any>('/autotrade/tasks/stop-all', {})
+    return response.data
   }
 }
+
+export interface SimSettings {
+  commission_rate: number
+  min_commission: number
+  stamp_tax_rate: number
+  transfer_fee_rate: number
+}
+
+export interface GridSignal {
+  signal_name: string
+  signal: string
+  signal_text: string
+  close: number
+  ma_key: string
+  ma_val: number
+  ma_deviation_pct: number
+  base_price: number
+  base_label: string
+  atr: number | null
+  atr_pct: number | null
+  dynamic_spread: boolean
+  grid_count: number
+  grid_spread_pct: number
+  step_pct: number
+  lower_bound: number
+  upper_bound: number
+  current_grid: number
+  total_grids: number
+  position_ratio: number
+  nearby_lower: number | null
+  nearby_upper: number | null
+  action_desc: string
+}
+
+export interface AutoTradeTask {
+  user_id?: number
+  enabled: boolean
+  symbol: string
+  strategy: string
+  grid_count: number
+  grid_spread: number
+  base_ma_key: string
+  macd_ma_key: string | null
+  position_size: number
+  check_interval: number
+  allocated_funds: number
+  last_check: string | null
+  last_signal: string | null
+}
+
+export interface TaskStatus {
+  symbol: string
+  running: boolean
+  task: AutoTradeTask
+  signal: GridSignal | null
+  task_cash: number
+  task_pnl: number
+  task_position: { shares: number; avg_cost: number }
+  task_name: string
+  unrealized_pnl: number
+}
+
