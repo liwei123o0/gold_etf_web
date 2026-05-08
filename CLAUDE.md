@@ -26,6 +26,40 @@ Runs on http://localhost:5173 (or next available port if in use), with `/api` pr
 
 **前后端分离架构**: FastAPI backend serves pure JSON APIs; Vue 3 SPA calls APIs via axios.
 
+### Backend Architecture
+
+`backend/main.py` is the FastAPI entry point and defines all routes directly. Helper modules in `backend/routes/` (Flask blueprints) and `backend/services/` are imported for their functions — the Flask code is not run as a Flask app.
+
+```
+backend/
+├── main.py              # FastAPI entry point, all route handlers (imports helpers from routes/)
+├── core/security.py     # JWT token creation/verification, password hashing
+├── models/
+│   ├── user.py          # User model (SQLite)
+│   ├── kline.py         # K-line cache model
+│   ├── schemas.py       # Pydantic request/response models
+│   ├── simulation.py    # SimulationAccount, SimulationPosition, SimulationOrder (SQLite)
+│   ├── settings.py      # SimSettings — commission/stamp_tax per symbol (SQLite)
+│   └── auto_trade.py    # AutoTradeTask — per-symbol tasks with allocated_funds (SQLite)
+├── routes/
+│   ├── auth.py          # Flask blueprint (not used directly — functions imported by main.py)
+│   ├── data.py          # Flask blueprint (not used directly — functions imported by main.py)
+│   ├── realtime.py      # Realtime price fetch functions (sina/tencent)
+│   ├── signaltime.py    # Real-time signal calculation
+│   ├── news.py          # News fetch functions
+│   └── backtest.py      # Backtest route handlers
+├── services/
+│   ├── gold_data.py     # Data fetch, caching, indicator calculation, signal generation
+│   ├── grid_trade.py    # Grid trading strategy (MA/MACD-anchored modes)
+│   ├── backtest.py      # Grid trading backtesting engine
+│   ├── signal.py        # SignalSummary, get_trading_signal()
+│   ├── news.py          # AKShare news + static fallback
+│   ├── simulation_trade.py  # Trade execution, portfolio management, order history
+│   └── auto_trade.py    # Multi-task auto-trading (asyncio loops per symbol per user)
+└── utils/
+    └── indicators.py    # Technical indicator calculations
+```
+
 ### Frontend Structure (`frontend/src/`)
 
 ```
@@ -40,34 +74,10 @@ Runs on http://localhost:5173 (or next available port if in use), with `/api` pr
 │   ├── layout/      # AppHeader
 │   └── common/      # LoadingSpinner, CyberButton
 ├── stores/          # Pinia stores (auth.ts, stock.ts, simulation.ts)
-├── services/       # API clients (api.ts, authService.ts, stockService.ts)
-├── composables/    # Vue composables (useAuth, useClock, useRealtime, useGlobalSettings)
-├── router/         # Vue Router with auth guards
-└── utils/          # Utilities (symbol.ts - symbol normalization)
-```
-
-### Backend Structure (`backend/`)
-
-```
-├── main.py              # FastAPI entry point, all route handlers
-├── core/security.py     # JWT token creation/verification, password hashing
-├── models/
-│   ├── user.py          # User model (SQLite)
-│   ├── kline.py         # K-line cache model
-│   ├── schemas.py       # Pydantic request/response models (HealthResponse, AuthResponse, etc.)
-│   ├── simulation.py     # SimulationAccount, SimulationPosition, SimulationOrder (SQLite)
-│   ├── settings.py      # SimSettings - commission/stamp_tax per symbol (SQLite)
-│   └── auto_trade.py    # AutoTradeTask - per-symbol tasks with allocated_funds (SQLite)
-├── services/
-│   ├── gold_data.py     # Data fetch, caching, indicator calculation, signal generation
-│   ├── grid_trade.py    # Grid trading strategy (MA/MACD-anchored modes)
-│   ├── backtest.py      # Grid trading backtesting engine
-│   ├── signal.py        # SignalSummary, get_trading_signal()
-│   ├── news.py          # AKShare news + static fallback
-│   ├── simulation_trade.py  # Trade execution, portfolio management, order history
-│   └── auto_trade.py    # Multi-task auto-trading (asyncio loops per symbol per user)
-└── utils/
-    └── indicators.py    # Technical indicator calculations
+├── services/        # API clients (api.ts, authService.ts, stockService.ts)
+├── composables/     # Vue composables (useAuth, useClock, useRealtime, useGlobalSettings)
+├── router/          # Vue Router with auth guards
+└── utils/           # Utilities (symbol.ts - symbol normalization)
 ```
 
 ### Database
@@ -139,6 +149,8 @@ SQLite in `instance/`:
 | `300xxx` | `sz` prefix | Shenzhen GEM |
 | `8xxxxx` | `bj` prefix | Beijing |
 
+Also defined in `frontend/src/utils/symbol.ts` and `backend/routes/data.py`.
+
 ## Signal Dimensions
 
 | Category | Signals |
@@ -170,3 +182,4 @@ SQLite in `instance/`:
 - Grid sell threshold uses `grid_count - 2` (not `-1`) to trigger earlier profit-taking
 - Charts color convention: **red (#ef5350) = price up**, **green (#26a69a) = price down**
 - Frontend port: Vite defaults to 5173 but auto-increments if port is busy (check startup output)
+- Backend `routes/` directory contains Flask blueprints (functions imported by FastAPI main.py, not run as a separate Flask app)

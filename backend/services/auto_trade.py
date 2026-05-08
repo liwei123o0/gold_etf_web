@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 from backend.models.auto_trade import AutoTradeTask
+from backend.models.settings import SimSettings
 from backend.services import simulation_trade as st
 from backend.services import gold_data
 from backend.services import grid_trade
@@ -207,7 +208,25 @@ class AutoTradeService:
             await asyncio.sleep(interval)
 
     @classmethod
+    def _is_trading_time(cls) -> bool:
+        """判断当前是否为交易时间（工作日9:30-11:30, 13:00-15:00）"""
+        now = datetime.now()
+        if now.weekday() >= 5:  # Saturday, Sunday
+            return False
+        hour, minute = now.hour, now.minute
+        # 9:30-11:30
+        if (hour == 9 and minute >= 30) or (9 < hour < 11) or (hour == 11 and minute <= 30):
+            return True
+        # 13:00-15:00
+        if (hour == 13) or (hour == 14) or (hour == 15 and minute == 0):
+            return True
+        return False
+
+    @classmethod
     async def _check_and_trade(cls, user_id: int, symbol: str) -> None:
+        if not cls._is_trading_time():
+            return
+
         task_cfg = AutoTradeTask.find_by_symbol(user_id, symbol)
         if not task_cfg:
             return
@@ -262,53 +281,79 @@ class AutoTradeService:
                 return
 
             close = float(latest["收盘"])
-
-            close = float(latest["收盘"])
-
             trade_name = latest.get("名称", symbol)
             if not trade_name or trade_name == symbol:
                 trade_name = symbol
-            # Cache task name
             cls._task_names[user_id][symbol] = trade_name
 
-            shares = 100
+            # 根据网格持仓比例计算目标持仓市值
+            position_ratio = signal.get("position_ratio", 0.5)
+            allocated_funds = task_cfg.get("allocated_funds", 0)
+            target_market_value = allocated_funds * position_ratio
             task_pos = cls._task_positions.get(user_id, {}).get(symbol, {"shares": 0, "avg_cost": 0})
-            task_cash = cls._task_cash[user_id].get(symbol, 0)
-            if signal["signal"] == "买入":
-                amount = close * shares
-                commission_max = amount * 0.0003
-                if task_cash < (amount + commission_max):
+            current_market_value = task_pos["shares"] * close
+            value_diff = target_market_value - current_market_value
+
+            settings = SimSettings.get(symbol)
+            commission_rate = settings.get("commission_rate", 0.0003)
+            min_commission = settings.get("min_commission", 5.0)
+            stamp_tax_rate = settings.get("stamp_tax_rate", 0.001)
+            transfer_fee_rate = settings.get("transfer_fee_rate", 0.00002)
+
+            # 价值差距小于1格的价值就不操作
+            step_value = close * (signal.get("step_pct", 1.0) / 100) * 100
+            if abs(value_diff) < step_value:
+                return
+
+            if value_diff > 0:
+                # 需要买入：目标持仓 > 当前持仓
+                buy_amount = value_diff
+                shares = int(round(buy_amount / close / 100)) * 100
+                if shares < 100:
                     return
-                cls._task_cash[user_id][symbol] -= (amount + commission_max)
-                # Update position
+                amount = close * shares
+                commission_est = max(amount * commission_rate, min_commission)
+                task_cash = cls._task_cash[user_id].get(symbol, 0)
+                if task_cash < (amount + commission_est):
+                    return
+                cls._task_cash[user_id][symbol] -= (amount + commission_est)
                 total_cost = task_pos["avg_cost"] * task_pos["shares"] + amount
                 task_pos["shares"] += shares
-                task_pos["avg_cost"] = total_cost / task_pos["shares"]
+                task_pos["avg_cost"] = total_cost / task_pos["shares"] if task_pos["shares"] > 0 else close
                 if user_id not in cls._task_positions:
                     cls._task_positions[user_id] = {}
                 cls._task_positions[user_id][symbol] = task_pos
                 result = st.execute_trade(user_id, "buy", symbol, trade_name, close, shares, trade_type="auto")
                 action_str = "买入"
             else:
-                if task_pos["shares"] < shares:
+                # 需要卖出：当前持仓 > 目标持仓
+                sell_amount = abs(value_diff)
+                shares = int(round(sell_amount / close / 100)) * 100
+                if shares < 100 or task_pos["shares"] < 100:
+                    return
+                shares = min(shares, task_pos["shares"])
+                shares = (shares // 100) * 100
+                if shares < 100:
                     return
                 result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type="auto")
                 if result.get("success"):
-                    sell_proceeds = close * shares - close * shares * 0.0003
-                    cls._task_cash[user_id][symbol] += sell_proceeds
-                    # P&L: (sell_price - avg_cost) * shares
+                    sell_proceeds = close * shares
+                    stamp_tax = sell_proceeds * stamp_tax_rate
+                    transfer_fee = sell_proceeds * transfer_fee_rate if symbol.startswith("sh") else 0
+                    net_proceeds = sell_proceeds - max(sell_proceeds * commission_rate, min_commission) - stamp_tax - transfer_fee
+                    cls._task_cash[user_id][symbol] += net_proceeds
                     pnl = (close - task_pos["avg_cost"]) * shares
                     cls._task_pnl[user_id][symbol] = cls._task_pnl.get(user_id, {}).get(symbol, 0) + pnl
-                    # Update position
                     task_pos["shares"] -= shares
+                    if task_pos["shares"] == 0:
+                        task_pos["avg_cost"] = 0
                     if user_id not in cls._task_positions:
                         cls._task_positions[user_id] = {}
                     cls._task_positions[user_id][symbol] = task_pos
                 action_str = "卖出"
 
             if result.get("success"):
-                print(f"[AutoTrade] {user_id}/{symbol} {action_str} {shares} shares at {close:.4f}")
-                # Persist runtime state to DB
+                print(f"[AutoTrade] {user_id}/{symbol} {action_str} {shares} shares at {close:.4f}, target_ratio={position_ratio:.2f}, diff={value_diff:.2f}")
                 cur_task_pos = cls._task_positions.get(user_id, {}).get(symbol, {"shares": 0, "avg_cost": 0})
                 AutoTradeTask.update_runtime(
                     user_id, symbol,

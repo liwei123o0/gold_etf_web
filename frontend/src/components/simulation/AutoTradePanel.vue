@@ -328,7 +328,7 @@ function getPriceChange(symbol: string) {
 
           <div v-if="ts.signal" class="task-signal-detail" :style="{ background: signalBg(ts.signal.signal) }">
             <span>{{ ts.signal.action_desc || ts.signal.signal_text }}</span>
-            <span class="signal-ratio">建议 {{ Math.round((ts.signal.position_ratio || 0) * 100) }}%</span>
+            <span class="signal-ratio">建议 {{ Math.floor((ts.signal.position_ratio || 0) * 100) }}%</span>
           </div>
 
           <div class="task-last-check">

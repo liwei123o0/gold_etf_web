@@ -63,7 +63,7 @@ function handleClear() {
             <td>{{ o.shares }}</td>
             <td>
               <span class="trade-type" :class="o.trade_type">
-                {{ o.trade_type === 'auto' ? '自动' : '手动' }}
+                {{ o.trade_type === 'manual' ? '手动' : '自动' }}
               </span>
             </td>
             <td>{{ o.commission.toFixed(2) }}</td>
