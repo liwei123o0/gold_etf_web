@@ -3,6 +3,7 @@ FastAPI 应用入口
 
 黄金ETF技术分析系统后端 API
 """
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,12 +34,28 @@ from backend.core.security import (
     verify_password,
 )
 
+# ==================== 启动信息 ====================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ---------- 启动逻辑 (原 startup_event) ----------
+    print("=" * 50)
+    print("黄金ETF技术分析系统 API v2.0")
+    print("后端启动成功!")
+    print("=" * 50)
+
+    yield   # 分隔启动和关闭
+
+    # ---------- 关闭逻辑 (如有需要可后续添加) ----------
+    # 例如：print("系统正在关闭...")
+    pass
+
 # ==================== FastAPI App ====================
 
 app = FastAPI(
     title="黄金ETF技术分析API",
     description="提供K线数据、技术指标、网格交易信号、模拟回测等功能",
     version="2.0.0",
+    lifespan=lifespan
 )
 
 # CORS 配置
@@ -303,17 +320,6 @@ async def post_simulation(request: BacktestRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"模拟执行失败: {str(e)}")
-
-
-# ==================== 启动信息 ====================
-
-@app.on_event("startup")
-async def startup_event():
-    print("=" * 50)
-    print("黄金ETF技术分析系统 API v2.0")
-    print("FastAPI backend started")
-    print("=" * 50)
-
 
 # ==================== Simulation Trading APIs ====================
 

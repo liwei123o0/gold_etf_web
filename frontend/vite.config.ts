@@ -17,5 +17,13 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  css: {
+    preprocessorOptions: {
+      scss: {
+        api: 'modern-compiler', // 🔴 关键配置
+        // 如果你有其他配置，比如 additionalData，请保留它们
+      }
+    }
   }
 })
