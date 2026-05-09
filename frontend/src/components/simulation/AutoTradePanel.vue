@@ -11,28 +11,42 @@ const { autoTradeTasks, taskCount, runningTaskCount, isAutoTrading, realtimePric
 const showAddForm = ref(false)
 const addForm = ref({
   symbol: '',
+  strategy: 'grid',
   grid_count: 10,
   base_ma_key: 'MA20',
   grid_spread: 0.10,
   position_size: 1.0,
   check_interval: 30,
   allocated_funds: 30000,
+  stop_loss_pct: -5.0,
+  take_profit_pct: 10.0,
+  trend_ma_key: '',
+  dynamic_interval: false,
 })
 const addError = ref<string | null>(null)
 
 // Edit task form
 const editingSymbol = ref<string | null>(null)
 const editForm = ref({
+  strategy: 'grid',
   grid_count: 10,
   base_ma_key: 'MA20',
   grid_spread: 0.10,
   position_size: 1.0,
   check_interval: 30,
   allocated_funds: 30000,
+  stop_loss_pct: -5.0,
+  take_profit_pct: 10.0,
+  trend_ma_key: '',
+  dynamic_interval: false,
 })
 
 const gridCountOptions = [5, 10, 15, 20]
 const maKeyOptions = ['MA5', 'MA10', 'MA20', 'MA60']
+const strategyOptions = [
+  { value: 'grid', label: '网格交易' },
+  { value: 'ma_trend', label: 'MA趋势跟踪' },
+]
 
 function signalColor(signal: string | null) {
   if (!signal) return '#7986cb'
@@ -50,8 +64,14 @@ function signalBg(signal: string | null) {
   return 'rgba(121,134,203,0.1)'
 }
 
+const isGridStrategy = computed(() => addForm.value.strategy === 'grid')
+
 function openAddForm() {
-  addForm.value = { symbol: '', grid_count: 10, base_ma_key: 'MA20', grid_spread: 0.10, position_size: 1.0, check_interval: 30, allocated_funds: 30000 }
+  addForm.value = {
+    symbol: '', strategy: 'grid', grid_count: 10, base_ma_key: 'MA20',
+    grid_spread: 0.10, position_size: 1.0, check_interval: 30, allocated_funds: 30000,
+    stop_loss_pct: -5.0, take_profit_pct: 10.0, trend_ma_key: '', dynamic_interval: false,
+  }
   addError.value = null
   showAddForm.value = true
 }
@@ -63,7 +83,9 @@ async function handleAddTask() {
     return
   }
   addError.value = null
-  const result = await simStore.addAutoTradeTask(symbol, addForm.value)
+  const payload = { ...addForm.value }
+  if (!payload.trend_ma_key) payload.trend_ma_key = undefined as any
+  const result = await simStore.addAutoTradeTask(symbol, payload)
   if (result.success) {
     showAddForm.value = false
     await simStore.fetchAutoTradeTasks()
@@ -77,18 +99,25 @@ function openEditForm(symbol: string) {
   if (!task) return
   editingSymbol.value = symbol
   editForm.value = {
+    strategy: task.task.strategy ?? 'grid',
     grid_count: task.task.grid_count ?? 10,
     base_ma_key: task.task.base_ma_key ?? 'MA20',
     grid_spread: task.task.grid_spread ?? 0.10,
     position_size: task.task.position_size ?? 1.0,
     check_interval: task.task.check_interval ?? 30,
     allocated_funds: task.task.allocated_funds ?? 30000,
+    stop_loss_pct: task.task.stop_loss_pct ?? -5.0,
+    take_profit_pct: task.task.take_profit_pct ?? 10.0,
+    trend_ma_key: task.task.trend_ma_key ?? '',
+    dynamic_interval: task.task.dynamic_interval ?? false,
   }
 }
 
 async function handleSaveEdit() {
   if (!editingSymbol.value) return
-  await simStore.updateAutoTradeTask(editingSymbol.value, editForm.value)
+  const payload = { ...editForm.value }
+  if (!payload.trend_ma_key) payload.trend_ma_key = undefined as any
+  await simStore.updateAutoTradeTask(editingSymbol.value, payload)
   editingSymbol.value = null
   await simStore.fetchAutoTradeTasks()
 }
@@ -138,6 +167,11 @@ function getPriceChange(symbol: string) {
   const change = ((rt.price - sig.close) / sig.close * 100)
   return change
 }
+
+function strategyLabel(s: string) {
+  const found = strategyOptions.find(o => o.value === s)
+  return found ? found.label : s
+}
 </script>
 
 <template>
@@ -170,21 +204,44 @@ function getPriceChange(symbol: string) {
           <input v-model="addForm.symbol" type="text" class="input" placeholder="如 518880" />
         </div>
         <div class="form-item">
-          <label>基准均线</label>
-          <select v-model="addForm.base_ma_key" class="input select">
-            <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+          <label>策略类型</label>
+          <select v-model="addForm.strategy" class="input select">
+            <option v-for="opt in strategyOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
         </div>
-        <div class="form-item">
-          <label>网格格数</label>
-          <select v-model="addForm.grid_count" class="input select">
-            <option v-for="n in gridCountOptions" :key="n" :value="n">{{ n }}格</option>
-          </select>
-        </div>
-        <div class="form-item">
-          <label>网格幅度</label>
-          <input v-model.number="addForm.grid_spread" type="number" min="0.01" max="0.50" step="0.01" class="input" />
-        </div>
+        <template v-if="isGridStrategy">
+          <div class="form-item">
+            <label>基准均线</label>
+            <select v-model="addForm.base_ma_key" class="input select">
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+          <div class="form-item">
+            <label>网格格数</label>
+            <select v-model="addForm.grid_count" class="input select">
+              <option v-for="n in gridCountOptions" :key="n" :value="n">{{ n }}格</option>
+            </select>
+          </div>
+          <div class="form-item">
+            <label>网格幅度</label>
+            <input v-model.number="addForm.grid_spread" type="number" min="0.01" max="0.50" step="0.01" class="input" />
+          </div>
+        </template>
+        <template v-else>
+          <div class="form-item">
+            <label>快线均线</label>
+            <select v-model="addForm.base_ma_key" class="input select">
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+          <div class="form-item">
+            <label>慢线均线（趋势过滤）</label>
+            <select v-model="addForm.trend_ma_key" class="input select">
+              <option value="">不启用</option>
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+        </template>
         <div class="form-item">
           <label>每次仓位</label>
           <input v-model.number="addForm.position_size" type="number" min="0.1" max="1.0" step="0.1" class="input" />
@@ -199,6 +256,23 @@ function getPriceChange(symbol: string) {
           <input v-model.number="addForm.allocated_funds" type="number" min="1000" step="10000" class="input" />
           <span class="unit">元</span>
         </div>
+        <div class="form-item">
+          <label>止损触发%</label>
+          <input v-model.number="addForm.stop_loss_pct" type="number" min="-20" max="0" step="1" class="input" />
+          <span class="unit">%（如-5=亏5%清仓）</span>
+        </div>
+        <div class="form-item">
+          <label>止盈触发%</label>
+          <input v-model.number="addForm.take_profit_pct" type="number" min="1" max="50" step="1" class="input" />
+          <span class="unit">%（如10=赚10%清仓）</span>
+        </div>
+        <div class="form-item">
+          <label>动态间隔</label>
+          <label class="toggle-label">
+            <input v-model="addForm.dynamic_interval" type="checkbox" class="checkbox" />
+            <span class="toggle-text">{{ addForm.dynamic_interval ? '开启' : '关闭' }}</span>
+          </label>
+        </div>
       </div>
       <div v-if="addError" class="error-msg">{{ addError }}</div>
       <div class="form-btns">
@@ -212,21 +286,44 @@ function getPriceChange(symbol: string) {
       <h4 class="form-title">编辑任务 · {{ editingSymbol }}</h4>
       <div class="form-grid">
         <div class="form-item">
-          <label>基准均线</label>
-          <select v-model="editForm.base_ma_key" class="input select">
-            <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+          <label>策略类型</label>
+          <select v-model="editForm.strategy" class="input select">
+            <option v-for="opt in strategyOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
         </div>
-        <div class="form-item">
-          <label>网格格数</label>
-          <select v-model="editForm.grid_count" class="input select">
-            <option v-for="n in gridCountOptions" :key="n" :value="n">{{ n }}格</option>
-          </select>
-        </div>
-        <div class="form-item">
-          <label>网格幅度</label>
-          <input v-model.number="editForm.grid_spread" type="number" min="0.01" max="0.50" step="0.01" class="input" />
-        </div>
+        <template v-if="editForm.strategy === 'grid'">
+          <div class="form-item">
+            <label>基准均线</label>
+            <select v-model="editForm.base_ma_key" class="input select">
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+          <div class="form-item">
+            <label>网格格数</label>
+            <select v-model="editForm.grid_count" class="input select">
+              <option v-for="n in gridCountOptions" :key="n" :value="n">{{ n }}格</option>
+            </select>
+          </div>
+          <div class="form-item">
+            <label>网格幅度</label>
+            <input v-model.number="editForm.grid_spread" type="number" min="0.01" max="0.50" step="0.01" class="input" />
+          </div>
+        </template>
+        <template v-else>
+          <div class="form-item">
+            <label>快线均线</label>
+            <select v-model="editForm.base_ma_key" class="input select">
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+          <div class="form-item">
+            <label>慢线均线（趋势过滤）</label>
+            <select v-model="editForm.trend_ma_key" class="input select">
+              <option value="">不启用</option>
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+        </template>
         <div class="form-item">
           <label>每次仓位</label>
           <input v-model.number="editForm.position_size" type="number" min="0.1" max="1.0" step="0.1" class="input" />
@@ -240,6 +337,23 @@ function getPriceChange(symbol: string) {
           <label>分配资金</label>
           <input v-model.number="editForm.allocated_funds" type="number" min="1000" step="10000" class="input" />
           <span class="unit">元</span>
+        </div>
+        <div class="form-item">
+          <label>止损触发%</label>
+          <input v-model.number="editForm.stop_loss_pct" type="number" min="-20" max="0" step="1" class="input" />
+          <span class="unit">%（如-5=亏5%清仓）</span>
+        </div>
+        <div class="form-item">
+          <label>止盈触发%</label>
+          <input v-model.number="editForm.take_profit_pct" type="number" min="1" max="50" step="1" class="input" />
+          <span class="unit">%（如10=赚10%清仓）</span>
+        </div>
+        <div class="form-item">
+          <label>动态间隔</label>
+          <label class="toggle-label">
+            <input v-model="editForm.dynamic_interval" type="checkbox" class="checkbox" />
+            <span class="toggle-text">{{ editForm.dynamic_interval ? '开启' : '关闭' }}</span>
+          </label>
         </div>
       </div>
       <div class="form-btns">
@@ -262,7 +376,9 @@ function getPriceChange(symbol: string) {
               <span class="task-symbol">{{ ts.symbol.toUpperCase() }}</span>
               <span class="task-name">{{ ts.task_name || ts.symbol }}</span>
             </div>
-            <span class="task-strategy">{{ ts.task.strategy === 'grid' ? '网格' : ts.task.strategy }}</span>
+            <span class="task-strategy">{{ ts.task.strategy === 'grid' ? '网格' : 'MA趋势' }}</span>
+            <span v-if="ts.task.trend_ma_key" class="task-tag">趋势过滤({{ ts.task.trend_ma_key }})</span>
+            <span v-if="ts.task.dynamic_interval" class="task-tag">动态间隔</span>
           </div>
           <div class="task-header-right">
             <div class="task-price" v-if="getRealtimePrice(ts.symbol) !== null">
@@ -322,6 +438,14 @@ function getPriceChange(symbol: string) {
               <span class="param-label">浮动盈亏</span>
               <span class="param-value" :style="{ color: (ts.unrealized_pnl ?? 0) >= 0 ? '#ef5350' : '#26a69a' }">
                 {{ (ts.unrealized_pnl ?? 0) >= 0 ? '+' : '' }}{{ (ts.unrealized_pnl ?? 0).toFixed(2) }}元
+              </span>
+            </div>
+            <div class="param-item">
+              <span class="param-label">止盈/止损</span>
+              <span class="param-value">
+                <span style="color: #26a69a">止{{ ts.task.take_profit_pct ?? 10 }}%</span>
+                /
+                <span style="color: #ef5350">损{{ (ts.task.stop_loss_pct ?? -5) }}%</span>
               </span>
             </div>
           </div>
@@ -478,11 +602,10 @@ function getPriceChange(symbol: string) {
   cursor: pointer;
 }
 
-.unit {
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-top: 2px;
-}
+.unit { font-size: 11px; color: rgba(255,255,255,0.5); margin-left: 4px; }
+.toggle-label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.toggle-label .checkbox { width: 16px; height: 16px; cursor: pointer; }
+.toggle-text { font-size: 12px; color: rgba(255,255,255,0.7); }
 
 .error-msg {
   color: #ef5350;
@@ -681,4 +804,9 @@ function getPriceChange(symbol: string) {
   color: white;
   flex: 1;
 }
+.tag-stopped { background: rgba(158,158,158,0.2); color: #9e9e9e; }
+.tag-filter { background: rgba(33,150,243,0.15); color: #42a5f5; }
+.tag-dynamic { background: rgba(255,183,77,0.15); color: #ffb74d; }
+.strategy-tag { background: rgba(149,117,205,0.15); color: #9575cd; }
+.task-tag { font-size: 11px; color: #42a5f5; background: rgba(33,150,243,0.1); padding: 1px 6px; border-radius: 3px; }
 </style>

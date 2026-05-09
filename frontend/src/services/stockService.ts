@@ -410,6 +410,10 @@ export interface AutoTradeTask {
   allocated_funds: number
   last_check: string | null
   last_signal: string | null
+  stop_loss_pct: number
+  take_profit_pct: number
+  trend_ma_key: string | null
+  dynamic_interval: boolean
 }
 
 export interface TaskStatus {
