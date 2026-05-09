@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 import sys
 import os
+import logging
 
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,16 +38,23 @@ from backend.core.security import (
 # ==================== 启动信息 ====================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ---------- 启动逻辑 (原 startup_event) ----------
+    # ---------- 启动逻辑 ----------
+    from backend.models.db import engine, Base
+    from backend.models.user import UserModel
+    from backend.models.kline import StockKline
+    from backend.models.simulation import SimAccount, SimPosition, SimOrder
+    from backend.models.settings import SimSetting, SimSymbolSetting
+    from backend.models.auto_trade import AutoTradeTaskModel
+
+    Base.metadata.create_all(bind=engine)
+
     print("=" * 50)
-    print("黄金ETF技术分析系统 API v2.0")
+    print("黄金ETF技术分析系统 API v2.0 (SQLAlchemy ORM)")
     print("后端启动成功!")
     print("=" * 50)
 
-    yield   # 分隔启动和关闭
+    yield
 
-    # ---------- 关闭逻辑 (如有需要可后续添加) ----------
-    # 例如：print("系统正在关闭...")
     pass
 
 # ==================== FastAPI App ====================

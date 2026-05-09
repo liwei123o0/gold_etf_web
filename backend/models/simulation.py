@@ -1,206 +1,214 @@
-"""Sim Trading Models - SQLite persistence"""
-import os
-import sqlite3
-from contextlib import contextmanager
+"""Sim Trading Models - SQLAlchemy ORM persistence"""
+
 from datetime import datetime
 
-BASEDIR = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-DB_PATH = os.path.join(BASEDIR, "instance", "sim_trading.db")
+from sqlalchemy import Column, Integer, String, Numeric, DateTime
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-def _get_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+from .db import Base, get_session
 
-@contextmanager
-def get_db_conn():
-    conn = _get_db()
-    try:
-        yield conn
-    finally:
-        conn.close()
 
-def init_sim_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = _get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute('CREATE TABLE IF NOT EXISTS sim_accounts (user_id INTEGER PRIMARY KEY, initial_capital REAL NOT NULL, cash REAL NOT NULL DEFAULT 0, frozen_cash REAL NOT NULL DEFAULT 0, realized_pnl REAL NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
-        cur.execute('CREATE TABLE IF NOT EXISTS sim_positions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, symbol TEXT NOT NULL, name TEXT NOT NULL, shares INTEGER NOT NULL DEFAULT 0, avg_cost REAL NOT NULL DEFAULT 0, current_price REAL NOT NULL DEFAULT 0, UNIQUE(user_id, symbol))')
-        cur.execute('CREATE TABLE IF NOT EXISTS sim_orders (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, direction TEXT NOT NULL, symbol TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL, shares INTEGER NOT NULL, commission REAL NOT NULL, pnl REAL NOT NULL DEFAULT 0, trade_type TEXT NOT NULL DEFAULT \'manual\', timestamp TEXT NOT NULL)')
-        cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_user ON sim_orders(user_id, timestamp DESC)')
-        try:
-            cur.execute("ALTER TABLE sim_orders ADD COLUMN trade_type TEXT DEFAULT 'manual'")
-        except Exception:
-            pass
-        conn.commit()
-    finally:
-        conn.close()
+class SimAccount(Base):
+    __tablename__ = "sim_accounts"
+
+    user_id = Column(Integer, primary_key=True)
+    initial_capital = Column(Numeric, nullable=False)
+    cash = Column(Numeric, nullable=False, default=0)
+    frozen_cash = Column(Numeric, nullable=False, default=0)
+    realized_pnl = Column(Numeric, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SimPosition(Base):
+    __tablename__ = "sim_positions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    symbol = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    shares = Column(Integer, nullable=False, default=0)
+    avg_cost = Column(Numeric, nullable=False, default=0)
+    current_price = Column(Numeric, nullable=False, default=0)
+
+
+class SimOrder(Base):
+    __tablename__ = "sim_orders"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    direction = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    price = Column(Numeric, nullable=False)
+    shares = Column(Integer, nullable=False)
+    commission = Column(Numeric, nullable=False)
+    pnl = Column(Numeric, nullable=False, default=0)
+    trade_type = Column(String, nullable=False, default="manual")
+    timestamp = Column(DateTime, nullable=False)
+
 
 class SimulationAccount:
-    @staticmethod
-    def _ensure_table():
-        init_sim_db()
-
     @classmethod
     def from_row(cls, row):
         if row is None:
             return None
         return {
-            "initial_capital": row["initial_capital"],
-            "cash": row["cash"],
-            "frozen_cash": row["frozen_cash"],
+            "initial_capital": float(row.initial_capital),
+            "cash": float(row.cash),
+            "frozen_cash": float(row.frozen_cash),
             "market_value": 0.0,
-            "total_assets": row["cash"],
+            "total_assets": float(row.cash),
             "unrealized_pnl": 0.0,
-            "realized_pnl": row["realized_pnl"],
+            "realized_pnl": float(row.realized_pnl),
             "total_pnl": 0.0,
         }
 
     @classmethod
     def find_by_user_id(cls, user_id):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM sim_accounts WHERE user_id = ?", (user_id,))
-            row = cur.fetchone()
-            return cls.from_row(row) if row else None
+        with get_session() as session:
+            row = session.query(SimAccount).filter(SimAccount.user_id == user_id).first()
+            return cls.from_row(row)
 
     @classmethod
     def upsert(cls, user_id, initial_capital, cash, frozen_cash=0.0, realized_pnl=0.0):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO sim_accounts (user_id, initial_capital, cash, frozen_cash, realized_pnl, updated_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    initial_capital = excluded.initial_capital,
-                    cash = excluded.cash,
-                    frozen_cash = excluded.frozen_cash,
-                    realized_pnl = excluded.realized_pnl,
-                    updated_at = CURRENT_TIMESTAMP
-            """, (user_id, initial_capital, cash, frozen_cash, realized_pnl))
-            conn.commit()
+        with get_session() as session:
+            stmt = pg_insert(SimAccount).values(
+                user_id=user_id,
+                initial_capital=initial_capital,
+                cash=cash,
+                frozen_cash=frozen_cash,
+                realized_pnl=realized_pnl,
+                updated_at=datetime.utcnow(),
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["user_id"],
+                set_={
+                    "initial_capital": stmt.excluded.initial_capital,
+                    "cash": stmt.excluded.cash,
+                    "frozen_cash": stmt.excluded.frozen_cash,
+                    "realized_pnl": stmt.excluded.realized_pnl,
+                    "updated_at": stmt.excluded.updated_at,
+                },
+            )
+            session.execute(stmt)
 
     @classmethod
     def delete_by_user_id(cls, user_id):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM sim_accounts WHERE user_id = ?", (user_id,))
-            conn.commit()
+        with get_session() as session:
+            session.query(SimAccount).filter(SimAccount.user_id == user_id).delete()
 
 
 class SimulationPosition:
-    @staticmethod
-    def _ensure_table():
-        init_sim_db()
-
     @classmethod
     def from_row(cls, row):
         if row is None:
             return None
-        unrealized = (row["current_price"] - row["avg_cost"]) * row["shares"]
-        unrealized_pct = (row["current_price"] - row["avg_cost"]) / row["avg_cost"] * 100 if row["avg_cost"] else 0
+        unrealized = (float(row.current_price) - float(row.avg_cost)) * row.shares
+        unrealized_pct = (
+            (float(row.current_price) - float(row.avg_cost)) / float(row.avg_cost) * 100
+            if float(row.avg_cost) else 0
+        )
         return {
-            "symbol": row["symbol"],
-            "name": row["name"],
-            "shares": row["shares"],
-            "avg_cost": row["avg_cost"],
-            "current_price": row["current_price"],
+            "symbol": row.symbol,
+            "name": row.name,
+            "shares": row.shares,
+            "avg_cost": float(row.avg_cost),
+            "current_price": float(row.current_price),
             "unrealized_pnl": unrealized,
             "unrealized_pnl_pct": unrealized_pct,
         }
 
     @classmethod
     def find_by_user_id(cls, user_id):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM sim_positions WHERE user_id = ? AND shares > 0", (user_id,))
-            rows = cur.fetchall()
+        with get_session() as session:
+            rows = session.query(SimPosition).filter(
+                SimPosition.user_id == user_id, SimPosition.shares > 0
+            ).all()
             return [cls.from_row(r) for r in rows]
 
     @classmethod
     def upsert(cls, user_id, symbol, name, shares, avg_cost, current_price):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
+        with get_session() as session:
             if shares <= 0:
-                cur.execute("DELETE FROM sim_positions WHERE user_id = ? AND symbol = ?", (user_id, symbol))
+                session.query(SimPosition).filter(
+                    SimPosition.user_id == user_id, SimPosition.symbol == symbol
+                ).delete()
             else:
-                cur.execute("""
-                    INSERT INTO sim_positions (user_id, symbol, name, shares, avg_cost, current_price)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(user_id, symbol) DO UPDATE SET
-                        name = excluded.name,
-                        shares = excluded.shares,
-                        avg_cost = excluded.avg_cost,
-                        current_price = excluded.current_price
-                """, (user_id, symbol, name, shares, avg_cost, current_price))
-            conn.commit()
+                stmt = pg_insert(SimPosition).values(
+                    user_id=user_id,
+                    symbol=symbol,
+                    name=name,
+                    shares=shares,
+                    avg_cost=avg_cost,
+                    current_price=current_price,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["user_id", "symbol"],
+                    set_={
+                        "name": stmt.excluded.name,
+                        "shares": stmt.excluded.shares,
+                        "avg_cost": stmt.excluded.avg_cost,
+                        "current_price": stmt.excluded.current_price,
+                    },
+                )
+                session.execute(stmt)
 
     @classmethod
     def delete_by_user_id(cls, user_id):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM sim_positions WHERE user_id = ?", (user_id,))
-            conn.commit()
+        with get_session() as session:
+            session.query(SimPosition).filter(SimPosition.user_id == user_id).delete()
 
 
 class SimulationOrder:
-    @staticmethod
-    def _ensure_table():
-        init_sim_db()
-
     @classmethod
     def from_row(cls, row):
         if row is None:
             return None
         return {
-            "id": row["id"],
-            "direction": row["direction"],
-            "symbol": row["symbol"],
-            "name": row["name"],
-            "price": row["price"],
-            "shares": row["shares"],
-            "commission": row["commission"],
-            "timestamp": row["timestamp"],
-            "pnl": row["pnl"],
-            "trade_type": row["trade_type"] if "trade_type" in row.keys() else "manual",
+            "id": row.id,
+            "direction": row.direction,
+            "symbol": row.symbol,
+            "name": row.name,
+            "price": float(row.price),
+            "shares": row.shares,
+            "commission": float(row.commission),
+            "timestamp": row.timestamp.strftime("%Y-%m-%d %H:%M:%S") if row.timestamp else "",
+            "pnl": float(row.pnl),
+            "trade_type": row.trade_type,
         }
 
     @classmethod
     def find_by_user_id(cls, user_id, limit=50):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT * FROM sim_orders WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
-                (user_id, limit)
+        with get_session() as session:
+            rows = (
+                session.query(SimOrder)
+                .filter(SimOrder.user_id == user_id)
+                .order_by(SimOrder.timestamp.desc())
+                .limit(limit)
+                .all()
             )
-            rows = cur.fetchall()
             return [cls.from_row(r) for r in rows]
 
     @classmethod
     def insert(cls, order_id, user_id, direction, symbol, name, price, shares, commission, pnl=0, trade_type="manual"):
-        cls._ensure_table()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO sim_orders (id, user_id, direction, symbol, name, price, shares, commission, pnl, trade_type, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (order_id, user_id, direction, symbol, name, price, shares, commission, pnl, trade_type, timestamp))
-            conn.commit()
+        with get_session() as session:
+            order = SimOrder(
+                id=order_id,
+                user_id=user_id,
+                direction=direction,
+                symbol=symbol,
+                name=name,
+                price=price,
+                shares=shares,
+                commission=commission,
+                pnl=pnl,
+                trade_type=trade_type,
+                timestamp=datetime.utcnow(),
+            )
+            session.add(order)
 
     @classmethod
     def delete_by_user_id(cls, user_id):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM sim_orders WHERE user_id = ?", (user_id,))
-            conn.commit()
+        with get_session() as session:
+            session.query(SimOrder).filter(SimOrder.user_id == user_id).delete()

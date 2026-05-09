@@ -1,258 +1,212 @@
-"""Auto Trade Task Model - SQLite persistence, per-symbol tasks"""
-import os
-import sqlite3
-from contextlib import contextmanager
+"""Auto Trade Task Model - SQLAlchemy ORM persistence"""
+
 from datetime import datetime
 
-BASEDIR = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-DB_PATH = os.path.join(BASEDIR, "instance", "sim_trading.db")
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, func
 
-def _get_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+from .db import Base, get_session
 
-@contextmanager
-def get_db_conn():
-    conn = _get_db()
-    try:
-        yield conn
-    finally:
-        conn.close()
 
-def init_auto_trade_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = _get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS auto_trade_tasks (
-                user_id INTEGER NOT NULL,
-                symbol TEXT NOT NULL,
-                strategy TEXT NOT NULL DEFAULT 'grid',
-                grid_count INTEGER DEFAULT 10,
-                grid_spread REAL DEFAULT 0.10,
-                base_ma_key TEXT DEFAULT 'MA20',
-                macd_ma_key TEXT DEFAULT NULL,
-                position_size REAL DEFAULT 1.0,
-                check_interval INTEGER DEFAULT 30,
-                allocated_funds REAL DEFAULT 0,
-                enabled INTEGER NOT NULL DEFAULT 0,
-                last_check TEXT DEFAULT NULL,
-                last_signal TEXT DEFAULT NULL,
-                task_cash REAL DEFAULT 0,
-                task_pnl REAL DEFAULT 0,
-                position_shares INTEGER DEFAULT 0,
-                position_avg_cost REAL DEFAULT 0,
-                task_name TEXT DEFAULT '',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, symbol)
-            )
-        """)
-        # Migration: add runtime columns if missing
-        try:
-            cur.execute("ALTER TABLE auto_trade_tasks ADD COLUMN task_cash REAL DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            cur.execute("ALTER TABLE auto_trade_tasks ADD COLUMN task_pnl REAL DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            cur.execute("ALTER TABLE auto_trade_tasks ADD COLUMN position_shares INTEGER DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            cur.execute("ALTER TABLE auto_trade_tasks ADD COLUMN position_avg_cost REAL DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            cur.execute("ALTER TABLE auto_trade_tasks ADD COLUMN task_name TEXT DEFAULT ''")
-        except Exception:
-            pass
-        conn.commit()
-    finally:
-        conn.close()
+class AutoTradeTaskModel(Base):
+    __tablename__ = "auto_trade_tasks"
+
+    user_id = Column(Integer, primary_key=True)
+    symbol = Column(String, primary_key=True)
+    strategy = Column(String, nullable=False, default="grid")
+    grid_count = Column(Integer, default=10)
+    grid_spread = Column(Numeric, default=0.10)
+    base_ma_key = Column(String, default="MA20")
+    macd_ma_key = Column(String, nullable=True)
+    position_size = Column(Numeric, default=1.0)
+    check_interval = Column(Integer, default=30)
+    allocated_funds = Column(Numeric, default=0)
+    enabled = Column(Boolean, nullable=False, default=False)
+    last_check = Column(DateTime, nullable=True)
+    last_signal = Column(String, nullable=True)
+    task_cash = Column(Numeric, default=0)
+    task_pnl = Column(Numeric, default=0)
+    position_shares = Column(Integer, default=0)
+    position_avg_cost = Column(Numeric, default=0)
+    task_name = Column(String, default="")
+    unrealized_pnl = Column(Numeric, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 class AutoTradeTask:
-    @staticmethod
-    def _ensure_table():
-        init_auto_trade_db()
-
     @classmethod
     def from_row(cls, row):
         if row is None:
             return None
         return {
-            "user_id": row["user_id"],
-            "symbol": row["symbol"],
-            "strategy": row["strategy"],
-            "grid_count": row["grid_count"],
-            "grid_spread": row["grid_spread"],
-            "base_ma_key": row["base_ma_key"],
-            "macd_ma_key": row["macd_ma_key"],
-            "position_size": row["position_size"],
-            "check_interval": row["check_interval"],
-            "allocated_funds": row["allocated_funds"] or 0,
-            "enabled": bool(row["enabled"]),
-            "last_check": row["last_check"],
-            "last_signal": row["last_signal"],
-            "task_cash": row["task_cash"] if "task_cash" in row.keys() else row["allocated_funds"],
-            "task_pnl": row["task_pnl"] if "task_pnl" in row.keys() else 0,
-            "position_shares": row["position_shares"] if "position_shares" in row.keys() else 0,
-            "position_avg_cost": row["position_avg_cost"] if "position_avg_cost" in row.keys() else 0,
-            "task_name": row["task_name"] if "task_name" in row.keys() else row["symbol"],
-            "unrealized_pnl": row["unrealized_pnl"] if "unrealized_pnl" in row.keys() else 0,
+            "user_id": row.user_id,
+            "symbol": row.symbol,
+            "strategy": row.strategy,
+            "grid_count": row.grid_count,
+            "grid_spread": float(row.grid_spread),
+            "base_ma_key": row.base_ma_key,
+            "macd_ma_key": row.macd_ma_key,
+            "position_size": float(row.position_size),
+            "check_interval": row.check_interval,
+            "allocated_funds": float(row.allocated_funds or 0),
+            "enabled": bool(row.enabled),
+            "last_check": row.last_check,
+            "last_signal": row.last_signal,
+            "task_cash": float(row.task_cash or 0),
+            "task_pnl": float(row.task_pnl or 0),
+            "position_shares": row.position_shares or 0,
+            "position_avg_cost": float(row.position_avg_cost or 0),
+            "task_name": row.task_name or row.symbol,
+            "unrealized_pnl": float(row.unrealized_pnl or 0),
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
         }
 
     @classmethod
     def find_by_user(cls, user_id):
-        """Get all tasks for a user"""
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT * FROM auto_trade_tasks WHERE user_id = ? ORDER BY symbol",
-                (user_id,)
+        with get_session() as session:
+            rows = (
+                session.query(AutoTradeTaskModel)
+                .filter(AutoTradeTaskModel.user_id == user_id)
+                .order_by(AutoTradeTaskModel.symbol)
+                .all()
             )
-            rows = cur.fetchall()
             return [cls.from_row(r) for r in rows]
 
     @classmethod
     def find_by_symbol(cls, user_id, symbol):
-        """Get a specific task"""
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT * FROM auto_trade_tasks WHERE user_id = ? AND symbol = ?",
-                (user_id, symbol)
-            )
-            row = cur.fetchone()
+        with get_session() as session:
+            row = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
             return cls.from_row(row) if row else None
 
     @classmethod
+    def find_all_enabled(cls):
+        with get_session() as session:
+            rows = (
+                session.query(AutoTradeTaskModel)
+                .filter(AutoTradeTaskModel.enabled == True)
+                .order_by(AutoTradeTaskModel.user_id, AutoTradeTaskModel.symbol)
+                .all()
+            )
+            return [cls.from_row(r) for r in rows]
+
+    @classmethod
     def upsert(cls, user_id, symbol, config: dict):
-        """Create or update a task"""
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO auto_trade_tasks
-                    (user_id, symbol, strategy, grid_count, grid_spread,
-                     base_ma_key, macd_ma_key, position_size, check_interval,
-                     allocated_funds, enabled, last_check, last_signal,
-                     task_cash, task_pnl, position_shares, position_avg_cost,
-                     unrealized_pnl, task_name, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id, symbol) DO UPDATE SET
-                    strategy = excluded.strategy,
-                    grid_count = excluded.grid_count,
-                    grid_spread = excluded.grid_spread,
-                    base_ma_key = excluded.base_ma_key,
-                    macd_ma_key = excluded.macd_ma_key,
-                    position_size = excluded.position_size,
-                    check_interval = excluded.check_interval,
-                    allocated_funds = excluded.allocated_funds,
-                    enabled = excluded.enabled,
-                    last_check = excluded.last_check,
-                    last_signal = excluded.last_signal,
-                    task_cash = excluded.task_cash,
-                    task_pnl = excluded.task_pnl,
-                    position_shares = excluded.position_shares,
-                    position_avg_cost = excluded.position_avg_cost,
-                    unrealized_pnl = excluded.unrealized_pnl,
-                    task_name = excluded.task_name,
-                    updated_at = CURRENT_TIMESTAMP
-            """, (
-                user_id,
-                symbol,
-                config.get("strategy", "grid"),
-                config.get("grid_count", 10),
-                config.get("grid_spread", 0.10),
-                config.get("base_ma_key", "MA20"),
-                config.get("macd_ma_key"),
-                config.get("position_size", 1.0),
-                config.get("check_interval", 30),
-                config.get("allocated_funds", 0),
-                1 if config.get("enabled") else 0,
-                config.get("last_check"),
-                config.get("last_signal"),
-                config.get("task_cash", config.get("allocated_funds", 0)),
-                config.get("task_pnl", 0),
-                config.get("position_shares", 0),
-                config.get("position_avg_cost", 0),
-                config.get("unrealized_pnl", 0),
-                config.get("task_name", symbol),
-            ))
-            conn.commit()
+        with get_session() as session:
+            existing = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
+            if existing:
+                existing.strategy = config.get("strategy", existing.strategy)
+                existing.grid_count = config.get("grid_count", existing.grid_count)
+                existing.grid_spread = config.get("grid_spread", existing.grid_spread)
+                existing.base_ma_key = config.get("base_ma_key", existing.base_ma_key)
+                existing.macd_ma_key = config.get("macd_ma_key", existing.macd_ma_key)
+                existing.position_size = config.get("position_size", existing.position_size)
+                existing.check_interval = config.get("check_interval", existing.check_interval)
+                existing.allocated_funds = config.get("allocated_funds", existing.allocated_funds)
+                existing.enabled = config.get("enabled", existing.enabled)
+                existing.last_check = config.get("last_check", existing.last_check)
+                existing.last_signal = config.get("last_signal", existing.last_signal)
+                existing.task_cash = config.get("task_cash", existing.task_cash)
+                existing.task_pnl = config.get("task_pnl", existing.task_pnl)
+                existing.position_shares = config.get("position_shares", existing.position_shares)
+                existing.position_avg_cost = config.get("position_avg_cost", existing.position_avg_cost)
+                existing.unrealized_pnl = config.get("unrealized_pnl", existing.unrealized_pnl)
+                existing.task_name = config.get("task_name", existing.task_name)
+                existing.updated_at = datetime.utcnow()
+            else:
+                model = AutoTradeTaskModel(
+                    user_id=user_id,
+                    symbol=symbol,
+                    strategy=config.get("strategy", "grid"),
+                    grid_count=config.get("grid_count", 10),
+                    grid_spread=config.get("grid_spread", 0.10),
+                    base_ma_key=config.get("base_ma_key", "MA20"),
+                    macd_ma_key=config.get("macd_ma_key"),
+                    position_size=config.get("position_size", 1.0),
+                    check_interval=config.get("check_interval", 30),
+                    allocated_funds=config.get("allocated_funds", 0),
+                    enabled=config.get("enabled", False),
+                    last_check=config.get("last_check"),
+                    last_signal=config.get("last_signal"),
+                    task_cash=config.get("task_cash", config.get("allocated_funds", 0)),
+                    task_pnl=config.get("task_pnl", 0),
+                    position_shares=config.get("position_shares", 0),
+                    position_avg_cost=config.get("position_avg_cost", 0),
+                    unrealized_pnl=config.get("unrealized_pnl", 0),
+                    task_name=config.get("task_name", symbol),
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                session.add(model)
 
     @classmethod
     def update_enabled(cls, user_id, symbol, enabled: bool):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO auto_trade_tasks (user_id, symbol, enabled, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id, symbol) DO UPDATE SET
-                    enabled = excluded.enabled,
-                    updated_at = CURRENT_TIMESTAMP
-            """, (user_id, symbol, 1 if enabled else 0))
-            conn.commit()
+        with get_session() as session:
+            existing = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
+            if existing:
+                existing.enabled = enabled
+                existing.updated_at = datetime.utcnow()
+            else:
+                model = AutoTradeTaskModel(
+                    user_id=user_id,
+                    symbol=symbol,
+                    enabled=enabled,
+                )
+                session.add(model)
 
     @classmethod
-    def update_last_check(cls, user_id, symbol, last_check: str, last_signal: str = None):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE auto_trade_tasks
-                SET last_check = ?, last_signal = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND symbol = ?
-            """, (last_check, last_signal, user_id, symbol))
-            conn.commit()
+    def update_last_check(cls, user_id, symbol, last_check=None, last_signal: str = None):
+        from datetime import datetime as dt
+        with get_session() as session:
+            session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).update({
+                AutoTradeTaskModel.last_check: dt.utcnow(),
+                AutoTradeTaskModel.last_signal: last_signal,
+                AutoTradeTaskModel.updated_at: dt.utcnow(),
+            })
 
     @classmethod
     def update_runtime(cls, user_id, symbol, task_cash: float, task_pnl: float,
                        position_shares: int, position_avg_cost: float,
                        unrealized_pnl: float = 0, task_name: str = None):
-        """Persist runtime state to DB"""
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE auto_trade_tasks
-                SET task_cash = ?, task_pnl = ?, position_shares = ?,
-                    position_avg_cost = ?, unrealized_pnl = ?, updated_at = CURRENT_TIMESTAMP
-                    , task_name = COALESCE(?, task_name)
-                WHERE user_id = ? AND symbol = ?
-            """, (task_cash, task_pnl, position_shares, position_avg_cost,
-                  unrealized_pnl, task_name, user_id, symbol))
-            conn.commit()
+        with get_session() as session:
+            model = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
+            if model:
+                model.task_cash = task_cash
+                model.task_pnl = task_pnl
+                model.position_shares = position_shares
+                model.position_avg_cost = position_avg_cost
+                model.unrealized_pnl = unrealized_pnl
+                model.updated_at = datetime.utcnow()
+                if task_name is not None:
+                    model.task_name = task_name
 
     @classmethod
     def total_allocated_funds(cls, user_id):
-        """Get sum of allocated_funds for all tasks of a user"""
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT COALESCE(SUM(allocated_funds), 0) FROM auto_trade_tasks WHERE user_id = ?",
-                (user_id,)
-            )
-            row = cur.fetchone()
-            return row[0] if row else 0
+        with get_session() as session:
+            result = session.query(func.coalesce(func.sum(AutoTradeTaskModel.allocated_funds), 0)).filter(
+                AutoTradeTaskModel.user_id == user_id
+            ).scalar()
+            return float(result)
 
     @classmethod
     def delete_task(cls, user_id, symbol):
-        cls._ensure_table()
-        with get_db_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "DELETE FROM auto_trade_tasks WHERE user_id = ? AND symbol = ?",
-                (user_id, symbol)
-            )
-            conn.commit()
+        with get_session() as session:
+            session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).delete()
