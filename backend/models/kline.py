@@ -117,7 +117,7 @@ class KlineModel:
         with get_session() as session:
             stmt = pg_insert(StockKline).values(records)
             stmt = stmt.on_conflict_do_nothing(
-                constraint="uq_stock_kline_symbol_date"
+                index_elements=["symbol", "date"]
             )
             session.execute(stmt)
             return len(records)

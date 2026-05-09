@@ -20,7 +20,15 @@ Runs on http://localhost:8000
 cd D:/IdeaProject/gold_etf_web/frontend
 npm run dev
 ```
-Runs on http://localhost:5173 (or next available port if in use), with `/api` proxied to FastAPI backend.
+Runs on http://localhost:5174 (Vite config hardcodes this port), with `/api` proxied to FastAPI backend.
+
+**Build frontend for production**:
+```bash
+cd D:/IdeaProject/gold_etf_web/frontend
+npm run build
+```
+
+There is no test suite or lint command configured for either frontend or backend.
 
 ## Architecture
 
@@ -35,12 +43,13 @@ backend/
 ├── main.py              # FastAPI entry point, all route handlers (imports helpers from routes/)
 ├── core/security.py     # JWT token creation/verification, password hashing
 ├── models/
-│   ├── user.py          # User model (SQLite)
+│   ├── db.py            # SQLAlchemy PostgreSQL engine & session
+│   ├── user.py          # User model
 │   ├── kline.py         # K-line cache model
 │   ├── schemas.py       # Pydantic request/response models
-│   ├── simulation.py    # SimulationAccount, SimulationPosition, SimulationOrder (SQLite)
-│   ├── settings.py      # SimSettings — commission/stamp_tax per symbol (SQLite)
-│   └── auto_trade.py    # AutoTradeTask — per-symbol tasks with allocated_funds (SQLite)
+│   ├── simulation.py    # SimulationAccount, SimulationPosition, SimulationOrder
+│   ├── settings.py      # SimSettings — commission/stamp_tax per symbol
+│   └── auto_trade.py    # AutoTradeTask — per-symbol tasks with allocated_funds
 ├── routes/
 │   ├── auth.py          # Flask blueprint (not used directly — functions imported by main.py)
 │   ├── data.py          # Flask blueprint (not used directly — functions imported by main.py)
@@ -55,7 +64,8 @@ backend/
 │   ├── signal.py        # SignalSummary, get_trading_signal()
 │   ├── news.py          # AKShare news + static fallback
 │   ├── simulation_trade.py  # Trade execution, portfolio management, order history
-│   └── auto_trade.py    # Multi-task auto-trading (asyncio loops per symbol per user)
+│   ├── auto_trade.py    # Multi-task auto-trading (DB-driven state)
+│   └── auto_trade_scheduler.py  # Single asyncio loop polling all enabled tasks
 └── utils/
     └── indicators.py    # Technical indicator calculations
 ```
@@ -82,10 +92,15 @@ backend/
 
 ### Database
 
-SQLite in `instance/`:
-- `users.db` — User accounts (passwords hashed with bcrypt)
-- `stock_kline.db` — K-line cache
-- `sim_trading.db` — Simulation trading: accounts, positions, orders, auto_trade_tasks, symbol_settings
+**PostgreSQL** (not SQLite). Config is hardcoded in `backend/models/db.py`:
+- dbname: `database`, user: `root`, password: `root`, host: `localhost`, port: `5432`
+
+Tables managed by SQLAlchemy ORM:
+- `users` — User accounts (passwords hashed with bcrypt)
+- `stock_klines` — K-line cache
+- `sim_accounts` / `sim_positions` / `sim_orders` — Simulation trading
+- `auto_trade_tasks` — Auto-trade task configs & runtime state
+- `sim_settings` / `sim_symbol_settings` — Commission/fee settings
 
 ## Key API Endpoints
 
@@ -166,12 +181,21 @@ Also defined in `frontend/src/utils/symbol.ts` and `backend/routes/data.py`.
 
 综合建议基于 `trade_signal` 字段：买入/卖出/观望。
 
-## Auto Trade Multi-task Architecture
+## Auto Trade Scheduler Architecture
 
-- Each user can create multiple tasks (one per symbol)
+- `AutoTradeScheduler` is a **single** global asyncio task (not one per symbol/user)
+- On startup, if any tasks are `enabled` in DB, the scheduler auto-starts
+- It polls all enabled tasks every check interval (default 30s), but **only during trading hours** (weekdays 9:30-11:30, 13:00-15:00)
 - Each task has its own `allocated_funds` budget (virtual cash pool)
-- Tasks share the same simulation account (cash/positions), but spending is tracked per-task via `_task_cash`
-- P&L is tracked per-task via `_task_pnl` (realized) and `_task_positions` (shares/avg_cost)
+- Tasks share the same simulation account (cash/positions), but spending is tracked per-task via `task_cash`
+- P&L is tracked per-task via `task_pnl` (realized) and `position_shares`/`position_avg_cost`
+- Trading guards:
+  - Signals must match **2 consecutive times** before execution (`CONSECUTIVE_SIGNALS_REQUIRED`)
+  - **Cooldown** between trades (default 60s)
+  - **Daily trade limit** (default 50)
+  - **Stop-loss / take-profit** checks run unconditionally
+  - **Trend MA filter** can block counter-trend signals
+  - **Dynamic interval** adjusts polling frequency based on ATR
 - Global settings: `useGlobalSettings` composable stores `realtimeInterval`, `simRealtimeInterval`, `autoTradeInterval` in localStorage
 
 ## Important Notes
@@ -181,5 +205,6 @@ Also defined in `frontend/src/utils/symbol.ts` and `backend/routes/data.py`.
 - Auth store initializes `user` from localStorage on load (token is checked, user is restored if token exists)
 - Grid sell threshold uses `grid_count - 2` (not `-1`) to trigger earlier profit-taking
 - Charts color convention: **red (#ef5350) = price up**, **green (#26a69a) = price down**
-- Frontend port: Vite defaults to 5173 but auto-increments if port is busy (check startup output)
 - Backend `routes/` directory contains Flask blueprints (functions imported by FastAPI main.py, not run as a separate Flask app)
+- `backend/models/db.py` hardcodes PostgreSQL credentials; there is no env-based config
+- K-line data sources: 新浪财经 (primary), 腾讯财经 (fallback)

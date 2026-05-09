@@ -10,12 +10,16 @@ import json
 import time
 import requests
 import pandas as pd
+import traceback
+import logging
 from datetime import datetime, timedelta, date as date_type
 from typing import Dict, Any, List, Tuple, Optional
 
 from backend.utils.indicators import calculate_indicators
 from backend.models.kline import KlineModel
 from backend.services.grid_trade import get_grid_signal
+
+logger = logging.getLogger(__name__)
 
 # 默认 ETF 代码：华夏黄金 ETF（518880）
 DEFAULT_SYMBOL = "sh518880"
@@ -111,7 +115,9 @@ def _fetch_from_sina(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
         df['成交量'] = pd.to_numeric(df['成交量'])
         df = df.sort_values('日期').reset_index(drop=True)
         return df
-    except Exception:
+    except Exception as e:
+        logger.error(f"[_fetch_from_sina] {symbol} error: {e}")
+        traceback.print_exc()
         return None
 
 
@@ -140,7 +146,9 @@ def _fetch_from_tencent(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
             df[col] = pd.to_numeric(df[col])
         df['成交量'] = pd.to_numeric(df['成交量'])
         return df
-    except Exception:
+    except Exception as e:
+        logger.error(f"[_fetch_from_tencent] {symbol} error: {e}")
+        traceback.print_exc()
         return None
 
 
@@ -190,6 +198,7 @@ def fetch_etf_kline(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN
     req_start = _parse_date_param(start_date)
     req_end = _parse_date_param(end_date)
     today = datetime.now().date()
+    logger.info(f"[fetch_etf_kline] {symbol} 请求参数: datalen={datalen}, start_date={start_date}, end_date={end_date}")
 
     # 确定实际需要查询的网络数据范围
     if req_start and req_end:
@@ -202,17 +211,28 @@ def fetch_etf_kline(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN
     else:
         # 无日期范围 → 使用缓存策略
         use_cache_fallback = True
-        db_latest = KlineModel.get_latest_date(symbol)
-        db_latest_date = datetime.strptime(db_latest, '%Y-%m-%d').date() if db_latest else None
+        try:
+            db_latest = KlineModel.get_latest_date(symbol)
+            db_latest_date = datetime.strptime(db_latest, '%Y-%m-%d').date() if db_latest else None
+            logger.info(f"[fetch_etf_kline] {symbol} 数据库最新日期: {db_latest_date}")
+        except Exception as e:
+            logger.error(f"[fetch_etf_kline] {symbol} 查询数据库最新日期失败: {e}")
+            traceback.print_exc()
+            db_latest_date = None
 
         if db_latest_date:
             # 数据库有数据
             cache_days = (today - db_latest_date).days
             if db_latest_date == today:
                 # 当天数据已有，直接用缓存（+ 可能有的历史）
-                cached = KlineModel.get_cached_data(symbol)
-                if len(cached) >= datalen:
-                    return cached.tail(datalen).reset_index(drop=True)
+                try:
+                    cached = KlineModel.get_cached_data(symbol)
+                    if len(cached) >= datalen:
+                        logger.info(f"[fetch_etf_kline] {symbol} 命中缓存，返回{len(cached)}条")
+                        return cached.tail(datalen).reset_index(drop=True)
+                except Exception as e:
+                    logger.error(f"[fetch_etf_kline] {symbol} 读取缓存失败: {e}")
+                    traceback.print_exc()
                 # 不足90天，补历史
                 fetch_end = today
                 fetch_start = today - timedelta(days=datalen - 1)
@@ -235,20 +255,31 @@ def fetch_etf_kline(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN
     fetch_datalen = max(1, (fetch_end - fetch_start).days + 1)
 
     # 从网络获取
+    logger.info(f"[fetch_etf_kline] {symbol} 开始从网络获取，范围 {fetch_start} ~ {fetch_end}")
     df_new = _fetch_from_network(symbol, fetch_datalen)
-    KlineModel.save_data(symbol, df_new)
+    try:
+        KlineModel.save_data(symbol, df_new)
+        logger.info(f"[fetch_etf_kline] {symbol} 数据已缓存，共{len(df_new)}条")
+    except Exception as e:
+        logger.error(f"[fetch_etf_kline] {symbol} 缓存保存失败: {e}")
+        traceback.print_exc()
 
     # 合并返回
-    if use_cache_fallback and merge_target_start is None:
-        # 全量返回数据库数据
-        full = KlineModel.get_cached_data(symbol)
-        return full.tail(datalen).reset_index(drop=True)
-    else:
-        # 返回请求范围
-        start_str = (merge_target_start or req_start).strftime('%Y-%m-%d') if (merge_target_start or req_start) else None
-        end_str = (merge_target_end or req_end).strftime('%Y-%m-%d') if (merge_target_end or req_end) else None
-        result = KlineModel.get_cached_data(symbol, start_str, end_str)
-        return result.reset_index(drop=True)
+    try:
+        if use_cache_fallback and merge_target_start is None:
+            # 全量返回数据库数据
+            full = KlineModel.get_cached_data(symbol)
+            return full.tail(datalen).reset_index(drop=True)
+        else:
+            # 返回请求范围
+            start_str = (merge_target_start or req_start).strftime('%Y-%m-%d') if (merge_target_start or req_start) else None
+            end_str = (merge_target_end or req_end).strftime('%Y-%m-%d') if (merge_target_end or req_end) else None
+            result = KlineModel.get_cached_data(symbol, start_str, end_str)
+            return result.reset_index(drop=True)
+    except Exception as e:
+        logger.error(f"[fetch_etf_kline] {symbol} 合并返回数据失败: {e}")
+        traceback.print_exc()
+        raise
 
 
 def _fetch_from_network(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
@@ -257,15 +288,20 @@ def _fetch_from_network(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
     for attempt in range(3):
         df = _fetch_from_sina(symbol, datalen)
         if df is not None and len(df) > 0:
+            logger.info(f"[_fetch_from_network] {symbol} 从新浪财经获取成功，共{len(df)}条")
             return df
         last_error = f"新浪财经第{attempt+1}次获取失败"
+        logger.warning(f"[_fetch_from_network] {symbol} {last_error}")
         time.sleep(0.5)
     for attempt in range(3):
         df = _fetch_from_tencent(symbol, datalen)
         if df is not None and len(df) > 0:
+            logger.info(f"[_fetch_from_network] {symbol} 从腾讯财经获取成功，共{len(df)}条")
             return df
         last_error = f"腾讯财经第{attempt+1}次获取失败"
+        logger.warning(f"[_fetch_from_network] {symbol} {last_error}")
         time.sleep(0.5)
+    logger.error(f"[_fetch_from_network] {symbol} 全部数据源均失败: {last_error}")
     raise ValueError(f"无法获取 {symbol} 的数据，请检查代码是否正确。{last_error}")
 
 
@@ -291,9 +327,14 @@ def get_full_data(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN,
     pd.DataFrame
         添加了技术指标列的 DataFrame
     """
-    df = fetch_etf_kline(symbol, datalen, start_date=start_date, end_date=end_date)
-    df = calculate_indicators(df)
-    return df
+    try:
+        df = fetch_etf_kline(symbol, datalen, start_date=start_date, end_date=end_date)
+        df = calculate_indicators(df)
+        return df
+    except Exception as e:
+        logger.error(f"[get_full_data] {symbol} error: {e}")
+        traceback.print_exc()
+        raise
 
 
 def generate_signals(latest: pd.Series, df: Optional[pd.DataFrame] = None) -> List[Tuple[str, str, str]]:
@@ -457,8 +498,13 @@ def build_api_response(df: pd.DataFrame, symbol: str = DEFAULT_SYMBOL,
     Dict
         符合前端 /api/data 接口规范的字典
     """
-    latest = df.iloc[-1]
-    signals = generate_signals(latest, df)
+    try:
+        latest = df.iloc[-1]
+        signals = generate_signals(latest, df)
+    except Exception as e:
+        logger.error(f"[build_api_response] {symbol} generate_signals error: {e}")
+        traceback.print_exc()
+        raise
 
     # 辅助函数：安全取值
     def safe(val, default=0.0):
