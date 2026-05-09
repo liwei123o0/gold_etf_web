@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, func
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, func, text
 
 from .db import Base, get_session
 
@@ -29,6 +29,17 @@ class AutoTradeTaskModel(Base):
     position_avg_cost = Column(Numeric, default=0)
     task_name = Column(String, default="")
     unrealized_pnl = Column(Numeric, default=0)
+    stop_loss_pct = Column(Numeric, default=-5.0)
+    take_profit_pct = Column(Numeric, default=10.0)
+    trend_ma_key = Column(String, nullable=True)
+    dynamic_interval = Column(Boolean, default=False)
+    last_trade_time = Column(DateTime, nullable=True)
+    last_trade_direction = Column(String, nullable=True)
+    trade_count_today = Column(Integer, default=0)
+    last_trade_date = Column(String, nullable=True)
+    consecutive_signals = Column(Integer, default=0)
+    cooldown_seconds = Column(Integer, default=60)
+    max_daily_trades = Column(Integer, default=50)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -58,6 +69,17 @@ class AutoTradeTask:
             "position_avg_cost": float(row.position_avg_cost or 0),
             "task_name": row.task_name or row.symbol,
             "unrealized_pnl": float(row.unrealized_pnl or 0),
+            "stop_loss_pct": float(getattr(row, 'stop_loss_pct', -5.0) or -5.0),
+            "take_profit_pct": float(getattr(row, 'take_profit_pct', 10.0) or 10.0),
+            "trend_ma_key": getattr(row, 'trend_ma_key', None),
+            "dynamic_interval": bool(getattr(row, 'dynamic_interval', False)),
+            "last_trade_time": getattr(row, 'last_trade_time', None),
+            "last_trade_direction": getattr(row, 'last_trade_direction', None),
+            "trade_count_today": getattr(row, 'trade_count_today', 0) or 0,
+            "last_trade_date": getattr(row, 'last_trade_date', None),
+            "consecutive_signals": getattr(row, 'consecutive_signals', 0) or 0,
+            "cooldown_seconds": getattr(row, 'cooldown_seconds', 60) or 60,
+            "max_daily_trades": getattr(row, 'max_daily_trades', 50) or 50,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -118,6 +140,12 @@ class AutoTradeTask:
                 existing.position_avg_cost = config.get("position_avg_cost", existing.position_avg_cost)
                 existing.unrealized_pnl = config.get("unrealized_pnl", existing.unrealized_pnl)
                 existing.task_name = config.get("task_name", existing.task_name)
+                existing.stop_loss_pct = config.get("stop_loss_pct", existing.stop_loss_pct)
+                existing.take_profit_pct = config.get("take_profit_pct", existing.take_profit_pct)
+                existing.trend_ma_key = config.get("trend_ma_key", existing.trend_ma_key)
+                existing.dynamic_interval = config.get("dynamic_interval", existing.dynamic_interval)
+                existing.cooldown_seconds = config.get("cooldown_seconds", existing.cooldown_seconds)
+                existing.max_daily_trades = config.get("max_daily_trades", existing.max_daily_trades)
                 existing.updated_at = datetime.utcnow()
             else:
                 model = AutoTradeTaskModel(
@@ -139,6 +167,10 @@ class AutoTradeTask:
                     position_shares=config.get("position_shares", 0),
                     position_avg_cost=config.get("position_avg_cost", 0),
                     unrealized_pnl=config.get("unrealized_pnl", 0),
+                    stop_loss_pct=config.get("stop_loss_pct", -5.0),
+                    take_profit_pct=config.get("take_profit_pct", 10.0),
+                    trend_ma_key=config.get("trend_ma_key"),
+                    dynamic_interval=config.get("dynamic_interval", False),
                     task_name=config.get("task_name", symbol),
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow(),
@@ -210,3 +242,102 @@ class AutoTradeTask:
                 AutoTradeTaskModel.user_id == user_id,
                 AutoTradeTaskModel.symbol == symbol,
             ).delete()
+
+    @classmethod
+    def record_trade(cls, user_id, symbol, direction: str):
+        """记录一次交易：更新最后交易时间、方向、今日计数"""
+        today_str = datetime.utcnow().strftime("%Y%m%d")
+        with get_session() as session:
+            model = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
+            if model:
+                if getattr(model, 'last_trade_date', None) != today_str:
+                    model.trade_count_today = 0
+                    model.last_trade_date = today_str
+                model.last_trade_time = datetime.utcnow()
+                model.last_trade_direction = direction
+                model.trade_count_today = (model.trade_count_today or 0) + 1
+                model.consecutive_signals = 0
+                model.updated_at = datetime.utcnow()
+
+    @classmethod
+    def is_in_cooldown(cls, user_id, symbol) -> bool:
+        """检查是否在冷却期内"""
+        from datetime import datetime as dt
+        with get_session() as session:
+            model = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
+            if not model or not model.last_trade_time:
+                return False
+            cooldown = getattr(model, 'cooldown_seconds', 60) or 60
+            elapsed = (dt.utcnow() - model.last_trade_time).total_seconds()
+            return elapsed < cooldown
+
+    @classmethod
+    def can_trade_today(cls, user_id, symbol) -> bool:
+        """检查今日交易次数是否未超限"""
+        today_str = datetime.utcnow().strftime("%Y%m%d")
+        with get_session() as session:
+            model = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
+            if not model:
+                return True
+            last_date = getattr(model, 'last_trade_date', None)
+            if last_date != today_str:
+                model.trade_count_today = 0
+                model.last_trade_date = today_str
+                model.updated_at = datetime.utcnow()
+                return True
+            max_trades = getattr(model, 'max_daily_trades', 50) or 50
+            return (model.trade_count_today or 0) < max_trades
+
+    @classmethod
+    def update_consecutive_signals(cls, user_id, symbol, current_signal: str, required_streak: int = 2):
+        """更新连续信号计数，返回是否达到阈值"""
+        with get_session() as session:
+            model = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.user_id == user_id,
+                AutoTradeTaskModel.symbol == symbol,
+            ).first()
+            if not model:
+                return False
+            last_signal = getattr(model, 'last_signal', None)
+            if current_signal in ("买入", "卖出") and current_signal == last_signal:
+                model.consecutive_signals = (model.consecutive_signals or 0) + 1
+            else:
+                model.consecutive_signals = 1 if current_signal in ("买入", "卖出") else 0
+            model.last_signal = current_signal
+            model.updated_at = datetime.utcnow()
+            return (model.consecutive_signals or 0) >= required_streak
+
+    @classmethod
+    def migrate_schema(cls):
+        """Add new columns for existing tables (safe to run multiple times)"""
+        from .db import engine
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        columns = [c["name"] for c in inspector.get_columns("auto_trade_tasks")]
+        new_cols = {
+            "stop_loss_pct": "NUMERIC DEFAULT -5.0",
+            "take_profit_pct": "NUMERIC DEFAULT 10.0",
+            "trend_ma_key": "VARCHAR",
+            "dynamic_interval": "BOOLEAN DEFAULT FALSE",
+            "last_trade_time": "TIMESTAMP",
+            "last_trade_direction": "VARCHAR",
+            "trade_count_today": "INTEGER DEFAULT 0",
+            "last_trade_date": "VARCHAR",
+            "consecutive_signals": "INTEGER DEFAULT 0",
+            "cooldown_seconds": "INTEGER DEFAULT 60",
+            "max_daily_trades": "INTEGER DEFAULT 50",
+        }
+        with engine.connect() as conn:
+            for col_name, col_type in new_cols.items():
+                if col_name not in columns:
+                    conn.execute(text(f"ALTER TABLE auto_trade_tasks ADD COLUMN {col_name} {col_type}"))
+            conn.commit()

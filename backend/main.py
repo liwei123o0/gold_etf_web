@@ -48,14 +48,30 @@ async def lifespan(app: FastAPI):
 
     Base.metadata.create_all(bind=engine)
 
+    from backend.models.auto_trade import AutoTradeTask
+    AutoTradeTask.migrate_schema()
+
+    from backend.services.auto_trade_scheduler import AutoTradeScheduler
+
+    enabled_tasks = AutoTradeTask.find_all_enabled()
+
     print("=" * 50)
     print("黄金ETF技术分析系统 API v2.0 (SQLAlchemy ORM)")
     print("后端启动成功!")
     print("=" * 50)
 
+    if enabled_tasks:
+        print(f"[Scheduler] 检测到 {len(enabled_tasks)} 个已启用任务，启动调度器")
+        await AutoTradeScheduler.start()
+    else:
+        print("[Scheduler] 无已启用任务，调度器待命（将在首个任务启动时自动激活）")
+
     yield
 
-    pass
+    if AutoTradeScheduler.is_running():
+        print("[Scheduler] 正在停止调度器...")
+        await AutoTradeScheduler.stop()
+    print("系统已关闭")
 
 # ==================== FastAPI App ====================
 

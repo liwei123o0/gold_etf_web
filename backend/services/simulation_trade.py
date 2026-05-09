@@ -1,4 +1,4 @@
-"""Simulation Trading Service - SQLite persistence"""
+"""Simulation Trading Service - PostgreSQL (SQLAlchemy ORM) persistence"""
 import uuid
 from datetime import datetime
 from backend.models.simulation import (
@@ -17,7 +17,7 @@ def reset_portfolio(user_id, initial_capital):
     return get_portfolio(user_id)
 
 def get_portfolio(user_id):
-    """Get full portfolio from SQLite"""
+    """Get full portfolio from PostgreSQL"""
     account = SimulationAccount.find_by_user_id(user_id)
     if account is None:
         return None
@@ -57,7 +57,7 @@ def place_order(user_id, direction, symbol, name, price, shares, commission, pnl
     }
 
 def execute_trade(user_id, direction, symbol, name, price, shares, trade_type="manual"):
-    """Execute buy or sell trade with SQLite persistence"""
+    """Execute buy or sell trade with PostgreSQL (SQLAlchemy ORM) persistence"""
     portfolio = get_portfolio(user_id)
     if not portfolio:
         return {"success": False, "error": "Account not found, please reset"}

@@ -484,3 +484,100 @@ def format_grid_text(signal: Dict[str, Any]) -> str:
     lines.append(f"{action_emoji} 今日网格信号: {signal['signal']}")
 
     return "\n".join(lines)
+
+
+def get_ma_trend_signal(latest: pd.Series,
+                        fast_ma_key: str = 'MA5',
+                        slow_ma_key: str = 'MA20',
+                        position_size: float = 1.0) -> Dict[str, Any]:
+    """
+    MA 趋势跟踪策略信号。
+
+    核心逻辑：
+    - 快线 > 慢线 且 价格 > 慢线 → 多头趋势，买入 / 加仓
+    - 快线 < 慢线 且 价格 < 慢线 → 空头趋势，卖出 / 减仓
+    - 其他 → 持有 / 观望
+
+    持仓比例基于趋势强度动态调整：
+    - 快慢线偏离度越大 → 趋势越强 → 持仓比例越高
+
+    Parameters
+    ----------
+    latest : pd.Series
+        最新行情数据（含 MA5/MA10/MA20/MA60 等均线、收盘价）
+    fast_ma_key : str
+        快线均线字段名（默认 'MA5'）
+    slow_ma_key : str
+        慢线均线字段名（默认 'MA20'）
+    position_size : float
+        单次交易最大仓位比例（0.1~1.0）
+
+    Returns
+    -------
+    Dict
+        信号结果，格式与 get_grid_signal 一致，可被调度器消费
+    """
+    close = float(latest['收盘'])
+    fast_ma = float(latest.get(fast_ma_key, 0))
+    slow_ma = float(latest.get(slow_ma_key, 0))
+
+    if fast_ma <= 0 or slow_ma <= 0:
+        return {
+            'signal_name': 'MA趋势跟踪',
+            'signal': '观望',
+            'signal_text': f'⚠️ 均线数据不足 ({fast_ma_key}={fast_ma:.4f}, {slow_ma_key}={slow_ma:.4f})',
+            'close': close,
+            'position_ratio': 0.5,
+            'step_pct': 1.0,
+            'action_desc': '数据不足，暂时观望',
+        }
+
+    ma_deviation = (fast_ma - slow_ma) / slow_ma * 100
+    price_vs_slow = (close - slow_ma) / slow_ma * 100
+
+    if fast_ma > slow_ma and close > slow_ma:
+        strength = min(abs(ma_deviation) / 5.0, 1.0)
+        position_ratio = round(0.5 + strength * 0.5, 4)
+        position_ratio = min(position_ratio, position_size)
+
+        if price_vs_slow > 3.0:
+            signal = "卖出"
+            action_desc = f"价格远离{slow_ma_key} {price_vs_slow:.1f}%，超买减仓"
+            position_ratio = round(max(0.1, position_ratio * 0.5), 4)
+        else:
+            signal = "买入"
+            action_desc = f"{fast_ma_key} > {slow_ma_key}，多头排列，趋势向上 (偏离{ma_deviation:.1f}%)"
+    elif fast_ma < slow_ma and close < slow_ma:
+        strength = min(abs(ma_deviation) / 5.0, 1.0)
+        position_ratio = round(0.5 - strength * 0.5, 4)
+        position_ratio = max(0.0, position_ratio)
+
+        if price_vs_slow < -3.0:
+            signal = "买入"
+            action_desc = f"价格远离{slow_ma_key} {abs(price_vs_slow):.1f}%，超卖反弹买入"
+            position_ratio = round(min(position_size, position_ratio + 0.2), 4)
+        else:
+            signal = "卖出"
+            action_desc = f"{fast_ma_key} < {slow_ma_key}，空头排列，趋势向下 (偏离{abs(ma_deviation):.1f}%)"
+    else:
+        signal = "持有"
+        action_desc = f"价格在{fast_ma_key}/{slow_ma_key}附近，均线粘合，等待方向选择"
+        position_ratio = 0.5
+
+    action_emoji = {"买入": "📈", "卖出": "📉", "持有": "➡️"}.get(signal, "➡️")
+    signal_text = (
+        f"{action_emoji} {signal}：{action_desc}，"
+        f"建议持仓{int(position_ratio * 100)}%"
+    )
+
+    return {
+        'signal_name': 'MA趋势跟踪',
+        'signal': signal,
+        'signal_text': signal_text,
+        'close': close,
+        'ma_key': f'{fast_ma_key}/{slow_ma_key}',
+        'ma_deviation_pct': round(ma_deviation, 3),
+        'position_ratio': position_ratio,
+        'step_pct': 1.0,
+        'action_desc': action_desc,
+    }

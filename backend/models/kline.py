@@ -82,7 +82,18 @@ class KlineModel:
         if not rows:
             return pd.DataFrame(columns=["日期", "开盘", "最高", "最低", "收盘", "成交量"])
 
-        df = pd.DataFrame(rows)
+        data = []
+        for r in rows:
+            data.append({
+                "日期": r.date.strftime("%Y-%m-%d") if hasattr(r.date, "strftime") else str(r.date),
+                "开盘": float(r.open),
+                "最高": float(r.high),
+                "最低": float(r.low),
+                "收盘": float(r.close),
+                "成交量": float(r.volume),
+            })
+
+        df = pd.DataFrame(data)
         df.columns = ["日期", "开盘", "最高", "最低", "收盘", "成交量"]
         return df
 

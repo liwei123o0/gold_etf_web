@@ -39,6 +39,12 @@ class AutoTradeService:
             "position_avg_cost": 0,
             "unrealized_pnl": 0,
             "task_name": config.get("task_name", symbol),
+            "stop_loss_pct": config.get("stop_loss_pct", -5.0),
+            "take_profit_pct": config.get("take_profit_pct", 10.0),
+            "trend_ma_key": config.get("trend_ma_key"),
+            "dynamic_interval": config.get("dynamic_interval", False),
+            "cooldown_seconds": config.get("cooldown_seconds", 60),
+            "max_daily_trades": config.get("max_daily_trades", 50),
         }
         AutoTradeTask.upsert(user_id, symbol, cfg)
         task = AutoTradeTask.find_by_symbol(user_id, symbol)

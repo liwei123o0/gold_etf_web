@@ -3,7 +3,7 @@
 
 提供黄金 ETF 实时数据获取、技术指标计算、信号分析等业务逻辑。
 数据来源：新浪财经 K 线接口（主），腾讯财经（备）。
-支持 SQLite 数据缓存，减少重复请求。
+支持 PostgreSQL (SQLAlchemy ORM) 数据缓存，减少重复请求。
 """
 
 import json
@@ -169,7 +169,7 @@ def fetch_etf_kline(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN
                     end_date: Optional[str] = None) -> pd.DataFrame:
     """
     从新浪财经获取K线数据，失败后尝试腾讯财经作为备选。
-    支持 SQLite 缓存：当天数据按需刷新，历史数据永久缓存。
+    支持 PostgreSQL (SQLAlchemy ORM) 缓存：当天数据按需刷新，历史数据永久缓存。
 
     Parameters
     ----------
