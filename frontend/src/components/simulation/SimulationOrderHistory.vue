@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { SimulationOrder } from '@/services/stockService'
+import { formatSymbolForDisplay } from '@/utils/symbol'
 
 const props = defineProps<{
   orders: SimulationOrder[]
@@ -57,7 +58,7 @@ function handleClear() {
             </td>
             <td>
               <div>{{ o.name }}</div>
-              <div class="sym-code">{{ o.symbol }}</div>
+              <div class="sym-code">{{ formatSymbolForDisplay(o.symbol) }}</div>
             </td>
             <td>{{ o.price.toFixed(3) }}</td>
             <td>{{ o.shares }}</td>

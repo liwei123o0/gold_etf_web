@@ -5,43 +5,44 @@ from datetime import datetime
 from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, func, text
 
 from .db import Base, get_session
+from ..utils.timezone import china_now_naive
 
 
 class AutoTradeTaskModel(Base):
     __tablename__ = "auto_trade_tasks"
 
-    user_id = Column(Integer, primary_key=True)
-    symbol = Column(String, primary_key=True)
-    strategy = Column(String, nullable=False, default="grid")
-    grid_count = Column(Integer, default=10)
-    grid_spread = Column(Numeric, default=0.10)
-    base_ma_key = Column(String, default="MA20")
-    macd_ma_key = Column(String, nullable=True)
-    position_size = Column(Numeric, default=1.0)
-    check_interval = Column(Integer, default=30)
-    allocated_funds = Column(Numeric, default=0)
-    enabled = Column(Boolean, nullable=False, default=False)
-    last_check = Column(DateTime, nullable=True)
-    last_signal = Column(String, nullable=True)
-    task_cash = Column(Numeric, default=0)
-    task_pnl = Column(Numeric, default=0)
-    position_shares = Column(Integer, default=0)
-    position_avg_cost = Column(Numeric, default=0)
-    task_name = Column(String, default="")
-    unrealized_pnl = Column(Numeric, default=0)
-    stop_loss_pct = Column(Numeric, default=-5.0)
-    take_profit_pct = Column(Numeric, default=10.0)
-    trend_ma_key = Column(String, nullable=True)
-    dynamic_interval = Column(Boolean, default=False)
-    last_trade_time = Column(DateTime, nullable=True)
-    last_trade_direction = Column(String, nullable=True)
-    trade_count_today = Column(Integer, default=0)
-    last_trade_date = Column(String, nullable=True)
-    consecutive_signals = Column(Integer, default=0)
-    cooldown_seconds = Column(Integer, default=60)
-    max_daily_trades = Column(Integer, default=50)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user_id = Column(Integer, primary_key=True)  # 用户ID
+    symbol = Column(String, primary_key=True)  # 股票代码
+    strategy = Column(String, nullable=False, default="grid")  # 交易策略(grid/ma_trend)
+    grid_count = Column(Integer, default=10)  # 网格数量
+    grid_spread = Column(Numeric, default=0.10)  # 网格间距(百分比)
+    base_ma_key = Column(String, default="MA20")  # 基础均线周期(MA5/MA10/MA20等)
+    macd_ma_key = Column(String, nullable=True)  # MACD均线周期
+    position_size = Column(Numeric, default=1.0)  # 仓位大小(0.0-1.0)
+    check_interval = Column(Integer, default=30)  # 检查间隔(秒)
+    allocated_funds = Column(Numeric, default=0)  # 分配资金总额
+    enabled = Column(Boolean, nullable=False, default=False)  # 是否启用
+    last_check = Column(DateTime, nullable=True)  # 最后检查时间
+    last_signal = Column(String, nullable=True)  # 最后信号
+    task_cash = Column(Numeric, default=0)  # 任务可用资金
+    task_pnl = Column(Numeric, default=0)  # 任务累计盈亏
+    position_shares = Column(Integer, default=0)  # 持仓数量
+    position_avg_cost = Column(Numeric, default=0)  # 持仓平均成本
+    task_name = Column(String, default="")  # 任务名称
+    unrealized_pnl = Column(Numeric, default=0)  # 浮动盈亏
+    stop_loss_pct = Column(Numeric, default=-5.0)  # 止损百分比
+    take_profit_pct = Column(Numeric, default=10.0)  # 止盈百分比
+    trend_ma_key = Column(String, nullable=True)  # 趋势均线周期
+    dynamic_interval = Column(Boolean, default=False)  # 是否启用动态间隔
+    last_trade_time = Column(DateTime, nullable=True)  # 最后交易时间
+    last_trade_direction = Column(String, nullable=True)  # 最后交易方向(买入/卖出)
+    trade_count_today = Column(Integer, default=0)  # 今日交易次数
+    last_trade_date = Column(String, nullable=True)  # 最后交易日期
+    consecutive_signals = Column(Integer, default=0)  # 连续信号计数
+    cooldown_seconds = Column(Integer, default=60)  # 冷却时间(秒)
+    max_daily_trades = Column(Integer, default=50)  # 每日最大交易次数
+    created_at = Column(DateTime, default=china_now_naive)  # 创建时间
+    updated_at = Column(DateTime, default=china_now_naive, onupdate=china_now_naive)  # 更新时间
 
 
 class AutoTradeTask:
@@ -146,7 +147,7 @@ class AutoTradeTask:
                 existing.dynamic_interval = config.get("dynamic_interval", existing.dynamic_interval)
                 existing.cooldown_seconds = config.get("cooldown_seconds", existing.cooldown_seconds)
                 existing.max_daily_trades = config.get("max_daily_trades", existing.max_daily_trades)
-                existing.updated_at = datetime.utcnow()
+                existing.updated_at = china_now_naive()
             else:
                 model = AutoTradeTaskModel(
                     user_id=user_id,
@@ -172,8 +173,8 @@ class AutoTradeTask:
                     trend_ma_key=config.get("trend_ma_key"),
                     dynamic_interval=config.get("dynamic_interval", False),
                     task_name=config.get("task_name", symbol),
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow(),
+                    created_at=china_now_naive(),
+                    updated_at=china_now_naive(),
                 )
                 session.add(model)
 
@@ -186,7 +187,7 @@ class AutoTradeTask:
             ).first()
             if existing:
                 existing.enabled = enabled
-                existing.updated_at = datetime.utcnow()
+                existing.updated_at = china_now_naive()
             else:
                 model = AutoTradeTaskModel(
                     user_id=user_id,
@@ -196,17 +197,21 @@ class AutoTradeTask:
                 session.add(model)
 
     @classmethod
-    def update_last_check(cls, user_id, symbol, last_check=None, last_signal: str = None):
-        from datetime import datetime as dt
+    def update_last_check(cls, user_id, symbol, last_signal: str = None):
+        import logging
+        logger = logging.getLogger(__name__)
         with get_session() as session:
-            session.query(AutoTradeTaskModel).filter(
+            model = session.query(AutoTradeTaskModel).filter(
                 AutoTradeTaskModel.user_id == user_id,
                 AutoTradeTaskModel.symbol == symbol,
-            ).update({
-                AutoTradeTaskModel.last_check: dt.utcnow(),
-                AutoTradeTaskModel.last_signal: last_signal,
-                AutoTradeTaskModel.updated_at: dt.utcnow(),
-            })
+            ).first()
+            if model:
+                model.last_check = china_now_naive()
+                model.last_signal = last_signal
+                model.updated_at = china_now_naive()
+                logger.info(f"[AutoTrade] update_last_check: user={user_id}, symbol={symbol}, signal={last_signal}")
+            else:
+                logger.warning(f"[AutoTrade] update_last_check: 任务不存在 user={user_id}, symbol={symbol}")
 
     @classmethod
     def update_runtime(cls, user_id, symbol, task_cash: float, task_pnl: float,
@@ -223,7 +228,7 @@ class AutoTradeTask:
                 model.position_shares = position_shares
                 model.position_avg_cost = position_avg_cost
                 model.unrealized_pnl = unrealized_pnl
-                model.updated_at = datetime.utcnow()
+                model.updated_at = china_now_naive()
                 if task_name is not None:
                     model.task_name = task_name
 
@@ -246,7 +251,7 @@ class AutoTradeTask:
     @classmethod
     def record_trade(cls, user_id, symbol, direction: str):
         """记录一次交易：更新最后交易时间、方向、今日计数"""
-        today_str = datetime.utcnow().strftime("%Y%m%d")
+        today_str = china_now_naive().strftime("%Y%m%d")
         with get_session() as session:
             model = session.query(AutoTradeTaskModel).filter(
                 AutoTradeTaskModel.user_id == user_id,
@@ -256,11 +261,11 @@ class AutoTradeTask:
                 if getattr(model, 'last_trade_date', None) != today_str:
                     model.trade_count_today = 0
                     model.last_trade_date = today_str
-                model.last_trade_time = datetime.utcnow()
+                model.last_trade_time = china_now_naive()
                 model.last_trade_direction = direction
                 model.trade_count_today = (model.trade_count_today or 0) + 1
                 model.consecutive_signals = 0
-                model.updated_at = datetime.utcnow()
+                model.updated_at = china_now_naive()
 
     @classmethod
     def is_in_cooldown(cls, user_id, symbol) -> bool:
@@ -280,7 +285,7 @@ class AutoTradeTask:
     @classmethod
     def can_trade_today(cls, user_id, symbol) -> bool:
         """检查今日交易次数是否未超限"""
-        today_str = datetime.utcnow().strftime("%Y%m%d")
+        today_str = china_now_naive().strftime("%Y%m%d")
         with get_session() as session:
             model = session.query(AutoTradeTaskModel).filter(
                 AutoTradeTaskModel.user_id == user_id,
@@ -292,7 +297,7 @@ class AutoTradeTask:
             if last_date != today_str:
                 model.trade_count_today = 0
                 model.last_trade_date = today_str
-                model.updated_at = datetime.utcnow()
+                model.updated_at = china_now_naive()
                 return True
             max_trades = getattr(model, 'max_daily_trades', 50) or 50
             return (model.trade_count_today or 0) < max_trades
@@ -313,7 +318,8 @@ class AutoTradeTask:
             else:
                 model.consecutive_signals = 1 if current_signal in ("买入", "卖出") else 0
             model.last_signal = current_signal
-            model.updated_at = datetime.utcnow()
+            model.last_check = china_now_naive()
+            model.updated_at = china_now_naive()
             return (model.consecutive_signals or 0) >= required_streak
 
     @classmethod

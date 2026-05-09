@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useSimulationStore } from '@/stores/simulation'
 import { storeToRefs } from 'pinia'
+import { formatSymbolForDisplay } from '@/utils/symbol'
 
 const simStore = useSimulationStore()
 const { positions } = storeToRefs(simStore)
@@ -47,7 +48,7 @@ async function closePosition(symbol: string, shares: number, price: number, name
           <tr v-for="p in positions" :key="p.symbol">
             <td>
               <div class="sym-name">{{ p.name }}</div>
-              <div class="sym-code">{{ p.symbol }}</div>
+              <div class="sym-code">{{ formatSymbolForDisplay(p.symbol) }}</div>
             </td>
             <td>{{ p.shares }}</td>
             <td>{{ p.avg_cost.toFixed(3) }}</td>

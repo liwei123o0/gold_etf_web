@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { stockService, type SimulationPortfolio, type SimulationPosition, type SimulationOrder, type TaskStatus, type AutoTradeTask, type GridSignal } from '@/services/stockService'
 import { useAuthStore } from './auth'
+import { normalizeSymbol, stripPrefix } from '@/utils/symbol'
 
 export const useSimulationStore = defineStore('simulation', () => {
   const authStore = useAuthStore()
@@ -128,6 +129,7 @@ export const useSimulationStore = defineStore('simulation', () => {
       const priceMap: Record<string, { price: number; name: string }> = {}
       for (const [sym, d] of Object.entries(data)) {
         priceMap[sym] = { price: d.price, name: d.name }
+        priceMap[stripPrefix(sym)] = { price: d.price, name: d.name }
       }
       realtimePrices.value = priceMap
       

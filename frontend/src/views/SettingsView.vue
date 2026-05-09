@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import { stockService, type SimSettings } from '@/services/stockService'
 import { useGlobalSettings } from '@/composables/useGlobalSettings'
+import { formatSymbolForDisplay } from '@/utils/symbol'
 
 const defaultSettings = ref<SimSettings>({
   commission_rate: 0.0003,
@@ -218,7 +219,7 @@ function formatRate(rate: number | undefined, defaultRate: number): string {
         <h3 class="card-title">单只证券费率设置</h3>
         <p class="card-desc">为特定证券单独设置费率，留空则使用默认设置</p>
         <div class="add-symbol-form">
-          <input v-model="newSymbol" type="text" class="input" placeholder="证券代码，如 sh518880" />
+          <input v-model="newSymbol" type="text" class="input" placeholder="证券代码，如 518880" />
           <div class="symbol-fee-inputs">
             <input v-model.number="newSymbolSettings.commission_rate" type="number" min="0" step="0.0001" placeholder="佣金" title="佣金费率（可选）" />
             <input v-model.number="newSymbolSettings.min_commission" type="number" min="0" step="0.1" placeholder="最低" title="最低佣金（可选）" />
@@ -248,7 +249,7 @@ function formatRate(rate: number | undefined, defaultRate: number): string {
             <tbody>
               <tr v-for="s in symbolList" :key="s.symbol">
                 <template v-if="editingSymbol === s.symbol">
-                  <td>{{ s.symbol }}</td>
+                  <td>{{ formatSymbolForDisplay(s.symbol) }}</td>
                   <td><input v-model.number="editSettings.commission_rate" type="number" step="0.0001" /></td>
                   <td><input v-model.number="editSettings.min_commission" type="number" step="0.1" /></td>
                   <td><input v-model.number="editSettings.stamp_tax_rate" type="number" step="0.0001" /></td>
@@ -259,7 +260,7 @@ function formatRate(rate: number | undefined, defaultRate: number): string {
                   </td>
                 </template>
                 <template v-else>
-                  <td>{{ s.symbol }}</td>
+                  <td>{{ formatSymbolForDisplay(s.symbol) }}</td>
                   <td>{{ formatRate(s.commission_rate, defaultSettings.commission_rate) }}</td>
                   <td>{{ s.min_commission !== undefined && s.min_commission !== null ? s.min_commission + ' 元' : '默认' }}</td>
                   <td>{{ formatRate(s.stamp_tax_rate, defaultSettings.stamp_tax_rate) }}</td>

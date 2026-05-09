@@ -8,20 +8,7 @@ from datetime import datetime
 from typing import Optional
 
 from backend.services.gold_data import get_full_data, generate_signals, get_grid_signal
-
-
-def normalize_symbol(raw: str) -> str:
-    """将用户输入的股票代码规范化为带前缀的形式"""
-    raw = (raw or '').strip()
-    if not raw:
-        return "sh518880"
-    if raw.startswith(('sh', 'sz', 'bj')):
-        return raw
-    if len(raw) >= 4:
-        if raw.startswith(('000', '001', '002', '003')):
-            return 'sz' + raw
-        return 'sh' + raw
-    return 'sh' + raw
+from backend.utils.symbol import normalize_symbol
 
 
 def _calc_trade_signal_from_latest(latest) -> str:

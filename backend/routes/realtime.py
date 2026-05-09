@@ -11,6 +11,8 @@ from typing import List, Dict, Any, Optional
 
 import requests
 
+from backend.utils.symbol import normalize_symbol
+
 # 新浪财经实时行情接口
 SINA_URL = "https://hq.sinajs.cn/list={symbols}"
 # 腾讯财经实时行情接口
@@ -21,18 +23,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": "https://finance.sina.com.cn/",
 }
-
-
-def _normalize_symbol(raw: str) -> str:
-    """规范化股票代码"""
-    raw = raw.strip()
-    if raw.startswith(('sh', 'sz', 'bj')):
-        return raw
-    if len(raw) >= 4:
-        if raw.startswith(('000', '001', '002', '003')):
-            return 'sz' + raw
-        return 'sh' + raw
-    return 'sh' + raw
 
 
 def _fetch_sina_realtime(symbols: list) -> dict:
@@ -174,7 +164,7 @@ def get_realtime(symbol: str = "sh518880") -> dict:
     if not raw_symbols:
         raw_symbols = ["sh518880"]
 
-    symbols = [_normalize_symbol(s) for s in raw_symbols]
+    symbols = [normalize_symbol(s) for s in raw_symbols]
 
     # 先尝试新浪
     result = _fetch_sina_realtime(symbols)

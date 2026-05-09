@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { useSimulationStore } from '@/stores/simulation'
 import { storeToRefs } from 'pinia'
-import { normalizeSymbol } from '@/utils/symbol'
+import { normalizeSymbol, formatSymbolForDisplay } from '@/utils/symbol'
 
 const simStore = useSimulationStore()
 const { autoTradeTasks, taskCount, runningTaskCount, isAutoTrading, realtimePrices } = storeToRefs(simStore)
@@ -154,12 +154,17 @@ async function handleStopAll() {
 const taskList = computed(() => Object.values(autoTradeTasks.value))
 
 function getRealtimePrice(symbol: string) {
-  const rt = realtimePrices.value[symbol]
+  const rt = realtimePrices.value[symbol] || realtimePrices.value[stripPrefix(symbol)]
   return rt ? rt.price : null
 }
 
+function getRealtimeName(symbol: string): string {
+  const rt = realtimePrices.value[symbol] || realtimePrices.value[stripPrefix(symbol)]
+  return rt?.name || ''
+}
+
 function getPriceChange(symbol: string) {
-  const rt = realtimePrices.value[symbol]
+  const rt = realtimePrices.value[symbol] || realtimePrices.value[stripPrefix(symbol)]
   if (!rt) return null
   const task = autoTradeTasks.value[symbol]
   const sig = task?.signal
@@ -373,8 +378,8 @@ function strategyLabel(s: string) {
           <div class="task-symbol-row">
             <span class="running-indicator" :class="{ running: ts.running }"></span>
             <div class="task-symbol-info">
-              <span class="task-symbol">{{ ts.symbol.toUpperCase() }}</span>
-              <span class="task-name">{{ ts.task_name || ts.symbol }}</span>
+              <span class="task-name">{{ getRealtimeName(ts.symbol) || ts.task_name || '' }}</span>
+              <span class="task-symbol">{{ formatSymbolForDisplay(ts.symbol) }}</span>
             </div>
             <span class="task-strategy">{{ ts.task.strategy === 'grid' ? '网格' : 'MA趋势' }}</span>
             <span v-if="ts.task.trend_ma_key" class="task-tag">趋势过滤({{ ts.task.trend_ma_key }})</span>
@@ -673,14 +678,14 @@ function strategyLabel(s: string) {
 }
 
 .task-symbol {
-  font-size: 15px;
-  font-weight: bold;
-  color: var(--text-primary);
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .task-name {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: 15px;
+  font-weight: bold;
+  color: var(--text-primary);
 }
 
 .running-indicator {

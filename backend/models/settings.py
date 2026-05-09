@@ -6,28 +6,29 @@ from sqlalchemy import Column, Integer, String, Numeric, DateTime
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from .db import Base, get_session
+from ..utils.timezone import china_now_naive
 
 
 class SimSetting(Base):
     __tablename__ = "sim_settings"
 
-    id = Column(Integer, primary_key=True)
-    commission_rate = Column(Numeric, nullable=False, default=0.0003)
-    min_commission = Column(Numeric, nullable=False, default=5.0)
-    stamp_tax_rate = Column(Numeric, nullable=False, default=0.001)
-    transfer_fee_rate = Column(Numeric, nullable=False, default=0.00002)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(Integer, primary_key=True)  # 设置ID
+    commission_rate = Column(Numeric, nullable=False, default=0.0003)  # 佣金费率
+    min_commission = Column(Numeric, nullable=False, default=5.0)  # 最低佣金
+    stamp_tax_rate = Column(Numeric, nullable=False, default=0.001)  # 印花税率
+    transfer_fee_rate = Column(Numeric, nullable=False, default=0.00002)  # 过户费率
+    updated_at = Column(DateTime, default=china_now_naive, onupdate=china_now_naive)  # 更新时间
 
 
 class SimSymbolSetting(Base):
     __tablename__ = "sim_symbol_settings"
 
-    symbol = Column(String, primary_key=True)
-    commission_rate = Column(Numeric, nullable=True)
-    min_commission = Column(Numeric, nullable=True)
-    stamp_tax_rate = Column(Numeric, nullable=True)
-    transfer_fee_rate = Column(Numeric, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    symbol = Column(String, primary_key=True)  # 股票代码
+    commission_rate = Column(Numeric, nullable=True)  # 佣金费率
+    min_commission = Column(Numeric, nullable=True)  # 最低佣金
+    stamp_tax_rate = Column(Numeric, nullable=True)  # 印花税率
+    transfer_fee_rate = Column(Numeric, nullable=True)  # 过户费率
+    updated_at = Column(DateTime, default=china_now_naive, onupdate=china_now_naive)  # 更新时间
 
 
 class SimSettings:
@@ -81,7 +82,7 @@ class SimSettings:
                 min_commission=min_commission,
                 stamp_tax_rate=stamp_tax_rate,
                 transfer_fee_rate=transfer_fee_rate,
-                updated_at=datetime.utcnow(),
+                updated_at=china_now_naive(),
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["id"],
@@ -136,7 +137,7 @@ class SimSettings:
                 min_commission=min_commission,
                 stamp_tax_rate=stamp_tax_rate,
                 transfer_fee_rate=transfer_fee_rate,
-                updated_at=datetime.utcnow(),
+                updated_at=china_now_naive(),
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["symbol"],

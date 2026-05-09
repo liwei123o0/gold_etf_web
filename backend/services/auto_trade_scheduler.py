@@ -8,11 +8,13 @@ import asyncio
 import logging
 from datetime import datetime
 
+from typing import Dict, Any, Optional
 from backend.models.auto_trade import AutoTradeTask
 from backend.models.settings import SimSettings
 from backend.services import simulation_trade as st
 from backend.services import gold_data
 from backend.services import grid_trade
+from backend.utils.timezone import china_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +132,8 @@ class AutoTradeScheduler:
 
     @classmethod
     def _is_trading_time(cls) -> bool:
-        now = datetime.now()
+        from backend.utils.timezone import get_china_now
+        now = get_china_now()
         if now.weekday() >= 5:
             return False
         hour, minute = now.hour, now.minute
@@ -413,10 +416,12 @@ class AutoTradeScheduler:
             task_cfg = AutoTradeTask.find_by_symbol(user_id, symbol)
             if not task_cfg:
                 return None
+            signal = cls._calc_task_signal(task_cfg)
             return {
                 "symbol": task_cfg["symbol"],
                 "running": cls.is_running() and task_cfg.get("enabled", False),
                 "task": task_cfg,
+                "signal": signal,
                 "task_cash": task_cfg.get("task_cash", task_cfg.get("allocated_funds", 0)),
                 "task_pnl": task_cfg.get("task_pnl", 0),
                 "task_position": {
@@ -435,10 +440,12 @@ class AutoTradeScheduler:
         tasks = AutoTradeTask.find_by_user(user_id)
         result = []
         for t in tasks:
+            signal = cls._calc_task_signal(t)
             result.append({
                 "symbol": t["symbol"],
                 "running": cls.is_running() and t.get("enabled", False),
                 "task": t,
+                "signal": signal,
                 "task_cash": t.get("task_cash", t.get("allocated_funds", 0)),
                 "task_pnl": t.get("task_pnl", 0),
                 "task_position": {
@@ -454,3 +461,53 @@ class AutoTradeScheduler:
                 "in_cooldown": AutoTradeTask.is_in_cooldown(t["user_id"], t["symbol"]),
             })
         return result
+
+    @classmethod
+    def _calc_task_signal(cls, task_cfg: dict) -> Optional[Dict[str, Any]]:
+        """计算任务当前的交易信号"""
+        try:
+            symbol = task_cfg.get("symbol")
+            if not symbol:
+                return None
+
+            df = gold_data.get_full_data(symbol, datalen=90)
+            if df is None or len(df) < 20:
+                return None
+
+            latest = df.iloc[-1]
+            close = float(latest["收盘"])
+
+            strategy = task_cfg.get("strategy", "grid")
+
+            if strategy == "ma_trend":
+                signal = grid_trade.get_ma_trend_signal(
+                    latest,
+                    fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
+                    slow_ma_key=task_cfg.get("trend_ma_key") or "MA20",
+                    position_size=task_cfg.get("position_size", 1.0),
+                )
+            else:
+                grid_count = task_cfg.get("grid_count", 10)
+                grid_spread = task_cfg.get("grid_spread", 0.10)
+                base_ma_key = task_cfg.get("base_ma_key", "MA20")
+                macd_ma_key = task_cfg.get("macd_ma_key")
+
+                macd_hist_mean = None
+                if macd_ma_key and "MACD_HIST" in df.columns:
+                    window = 20
+                    macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
+
+                signal = grid_trade.get_grid_signal(
+                    latest,
+                    grid_count=grid_count,
+                    grid_spread=grid_spread,
+                    ma_key=base_ma_key,
+                    macd_ma_key=macd_ma_key,
+                    macd_hist_mean=macd_hist_mean,
+                )
+
+            signal["close"] = close
+            return signal
+        except Exception as e:
+            logger.warning(f"计算任务信号失败: {e}")
+            return None

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, date as date_type
 from typing import Dict, Any, List, Tuple, Optional
 
 from backend.utils.indicators import calculate_indicators
+from backend.utils.symbol import normalize_symbol
 from backend.models.kline import KlineModel
 from backend.services.grid_trade import get_grid_signal
 
@@ -314,7 +315,7 @@ def get_full_data(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN,
     Parameters
     ----------
     symbol : str
-        ETF 代码
+        ETF 代码（支持6位数字或带前缀的代码）
     datalen : int
         数据天数（无日期范围时使用）
     start_date : str, optional
@@ -328,6 +329,7 @@ def get_full_data(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN,
         添加了技术指标列的 DataFrame
     """
     try:
+        symbol = normalize_symbol(symbol)
         df = fetch_etf_kline(symbol, datalen, start_date=start_date, end_date=end_date)
         df = calculate_indicators(df)
         return df

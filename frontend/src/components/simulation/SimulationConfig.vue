@@ -2,11 +2,12 @@
 import { ref, computed, watch } from 'vue'
 import { useSimulationStore } from '@/stores/simulation'
 import { storeToRefs } from 'pinia'
+import { stripPrefix } from '@/utils/symbol'
 
 const simStore = useSimulationStore()
 const { realtimePrices } = storeToRefs(simStore)
 
-const symbol = ref(simStore.currentSymbol)
+const symbol = ref(stripPrefix(simStore.currentSymbol))
 const direction = ref<'buy' | 'sell'>('buy')
 const shares = ref(100)
 const priceMode = ref<'realtime' | 'custom'>('realtime')
@@ -57,7 +58,7 @@ const canSubmit = computed(() => {
     <div class="order-form">
       <div class="form-row">
         <label>证券代码</label>
-        <input v-model="symbol" type="text" class="input" placeholder="如 sh518880" />
+        <input v-model="symbol" type="text" class="input" placeholder="如 518880" />
       </div>
 
       <div class="form-row">

@@ -6,46 +6,47 @@ from sqlalchemy import Column, Integer, String, Numeric, DateTime
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from .db import Base, get_session
+from ..utils.timezone import china_now_naive
 
 
 class SimAccount(Base):
     __tablename__ = "sim_accounts"
 
-    user_id = Column(Integer, primary_key=True)
-    initial_capital = Column(Numeric, nullable=False)
-    cash = Column(Numeric, nullable=False, default=0)
-    frozen_cash = Column(Numeric, nullable=False, default=0)
-    realized_pnl = Column(Numeric, nullable=False, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user_id = Column(Integer, primary_key=True)  # 用户ID
+    initial_capital = Column(Numeric, nullable=False)  # 初始资金
+    cash = Column(Numeric, nullable=False, default=0)  # 可用资金
+    frozen_cash = Column(Numeric, nullable=False, default=0)  # 冻结资金
+    realized_pnl = Column(Numeric, nullable=False, default=0)  # 已实现盈亏
+    created_at = Column(DateTime, default=china_now_naive)  # 创建时间
+    updated_at = Column(DateTime, default=china_now_naive, onupdate=china_now_naive)  # 更新时间
 
 
 class SimPosition(Base):
     __tablename__ = "sim_positions"
 
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False)
-    symbol = Column(String, nullable=False)
-    name = Column(String, nullable=False)
-    shares = Column(Integer, nullable=False, default=0)
-    avg_cost = Column(Numeric, nullable=False, default=0)
-    current_price = Column(Numeric, nullable=False, default=0)
+    id = Column(Integer, primary_key=True)  # 持仓ID
+    user_id = Column(Integer, nullable=False)  # 用户ID
+    symbol = Column(String, nullable=False)  # 股票代码
+    name = Column(String, nullable=False)  # 股票名称
+    shares = Column(Integer, nullable=False, default=0)  # 持仓数量
+    avg_cost = Column(Numeric, nullable=False, default=0)  # 平均成本
+    current_price = Column(Numeric, nullable=False, default=0)  # 当前价格
 
 
 class SimOrder(Base):
     __tablename__ = "sim_orders"
 
-    id = Column(String, primary_key=True)
-    user_id = Column(Integer, nullable=False)
-    direction = Column(String, nullable=False)
-    symbol = Column(String, nullable=False)
-    name = Column(String, nullable=False)
-    price = Column(Numeric, nullable=False)
-    shares = Column(Integer, nullable=False)
-    commission = Column(Numeric, nullable=False)
-    pnl = Column(Numeric, nullable=False, default=0)
-    trade_type = Column(String, nullable=False, default="manual")
-    timestamp = Column(DateTime, nullable=False)
+    id = Column(String, primary_key=True)  # 订单ID
+    user_id = Column(Integer, nullable=False)  # 用户ID
+    direction = Column(String, nullable=False)  # 交易方向(买入/卖出)
+    symbol = Column(String, nullable=False)  # 股票代码
+    name = Column(String, nullable=False)  # 股票名称
+    price = Column(Numeric, nullable=False)  # 成交价格
+    shares = Column(Integer, nullable=False)  # 成交数量
+    commission = Column(Numeric, nullable=False)  # 手续费
+    pnl = Column(Numeric, nullable=False, default=0)  # 盈亏
+    trade_type = Column(String, nullable=False, default="manual")  # 交易类型(manual手动/auto自动)
+    timestamp = Column(DateTime, nullable=False)  # 成交时间
 
 
 class SimulationAccount:
@@ -79,7 +80,7 @@ class SimulationAccount:
                 cash=cash,
                 frozen_cash=frozen_cash,
                 realized_pnl=realized_pnl,
-                updated_at=datetime.utcnow(),
+                updated_at=china_now_naive(),
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["user_id"],
@@ -204,7 +205,7 @@ class SimulationOrder:
                 commission=commission,
                 pnl=pnl,
                 trade_type=trade_type,
-                timestamp=datetime.utcnow(),
+                timestamp=china_now_naive(),
             )
             session.add(order)
 

@@ -8,6 +8,7 @@ import SimulationOrderHistory from '@/components/simulation/SimulationOrderHisto
 import AutoTradePanel from '@/components/simulation/AutoTradePanel.vue'
 import { useSimulationStore } from '@/stores/simulation'
 import { useGlobalSettings } from '@/composables/useGlobalSettings'
+import { stripPrefix } from '@/utils/symbol'
 import { storeToRefs } from 'pinia'
 
 const simStore = useSimulationStore()
@@ -26,14 +27,16 @@ onMounted(async () => {
 
   const pollRealtime = async () => {
     const pos = simStore.positions
-    const symbols: string[] = pos.map((p: any) => p.symbol)
-    if (simStore.currentSymbol && !symbols.includes(simStore.currentSymbol)) {
-      symbols.push(simStore.currentSymbol)
+    const symbols: string[] = pos.map((p: any) => stripPrefix(p.symbol))
+    const currentSymbol = stripPrefix(simStore.currentSymbol)
+    if (currentSymbol && !symbols.includes(currentSymbol)) {
+      symbols.push(currentSymbol)
     }
-    // Poll symbols from running auto-trade tasks
+    // Poll symbols from all auto-trade tasks (running or not) for real-time price display
     for (const ts of Object.values(simStore.autoTradeTasks)) {
-      if (ts.running && !symbols.includes(ts.symbol)) {
-        symbols.push(ts.symbol)
+      const sym = stripPrefix(ts.symbol)
+      if (!symbols.includes(sym)) {
+        symbols.push(sym)
       }
     }
     if (symbols.length > 0) {

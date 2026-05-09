@@ -126,6 +126,8 @@ async def register(request: RegisterRequest):
 
     # 创建用户
     user = User.create(request.username, request.password)
+    if not user:
+        return AuthResponse(success=False, error="注册失败，请查看后端日志")
     return AuthResponse(
         success=True,
         user={"id": user.id, "username": user.username, "created_at": user.created_at}
@@ -148,7 +150,7 @@ async def login(request: LoginRequest):
 
     return AuthResponse(
         success=True,
-        user={"id": user.id, "username": user.username, "created_at": user.created_at},
+        user={"id": user.id, "username": user.username, "created_at": str(user.created_at)},
         token=access_token,
     )
 
@@ -221,15 +223,20 @@ async def get_data(
 
 @app.get("/api/realtime", response_model=RealtimeResponse, tags=["实时行情"])
 async def get_realtime(
-    symbol: str = Query(default="sh518880"),
+    symbol: str = Query(default="518880"),
 ):
     """获取实时行情"""
     from backend.routes import realtime as realtime_module
+    import logging
+    logger = logging.getLogger(__name__)
 
     try:
+        logger.info(f"[Realtime API] 请求实时行情: symbol={symbol}")
         result = realtime_module.get_realtime(symbol)
+        logger.info(f"[Realtime API] 获取成功: symbols={list(result.get('data', {}).keys())}")
         return result
     except Exception as e:
+        logger.error(f"[Realtime API] 获取实时行情失败: symbol={symbol}, error={str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

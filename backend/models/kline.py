@@ -19,14 +19,14 @@ from .db import Base, get_session
 class StockKline(Base):
     __tablename__ = "stock_kline"
 
-    id = Column(Integer, primary_key=True)
-    symbol = Column(String, nullable=False)
-    date = Column(Date, nullable=False)
-    open = Column(Numeric, nullable=False)
-    high = Column(Numeric, nullable=False)
-    low = Column(Numeric, nullable=False)
-    close = Column(Numeric, nullable=False)
-    volume = Column(Numeric, nullable=False)
+    id = Column(Integer, primary_key=True)  # 记录ID
+    symbol = Column(String, nullable=False)  # 股票代码
+    date = Column(Date, nullable=False)  # 交易日期
+    open = Column(Numeric, nullable=False)  # 开盘价
+    high = Column(Numeric, nullable=False)  # 最高价
+    low = Column(Numeric, nullable=False)  # 最低价
+    close = Column(Numeric, nullable=False)  # 收盘价
+    volume = Column(Numeric, nullable=False)  # 成交量
 
     __table_args__ = (
         UniqueConstraint("symbol", "date", name="uq_stock_kline_symbol_date"),

@@ -7,38 +7,12 @@
 from datetime import datetime
 from flask import Blueprint, jsonify, request
 from backend.services.gold_data import get_full_data, build_api_response
+from backend.utils.symbol import normalize_symbol
 
 # 创建蓝图
 bp = Blueprint('data', __name__)
 
 DEFAULT_SYMBOL = "sh518880"
-
-
-def normalize_symbol(raw: str) -> str:
-    """
-    将用户输入的股票代码规范化为带前缀的形式。
-
-    Examples
-    --------
-        '000300'   -> 'sz000300'
-        '518880'   -> 'sh518880'
-        'sh518880' -> 'sh518880'
-        'sz000001' -> 'sz000001'
-        '贵州茅台'  -> 'sh600519'  （无法识别中文，返回默认）
-    """
-    raw = (raw or '').strip()
-    if not raw:
-        return DEFAULT_SYMBOL
-    # 已有前缀，直接返回
-    if raw.startswith('sh') or raw.startswith('sz'):
-        return raw
-    # 纯数字 → 自动补前缀（深交所以 000/001/002/003/开头）
-    if len(raw) >= 4 and (
-        raw.startswith('000') or raw.startswith('001') or
-        raw.startswith('002') or raw.startswith('003')
-    ):
-        return 'sz' + raw
-    return 'sh' + raw
 
 
 def _normalize_date(value: str) -> datetime:

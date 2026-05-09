@@ -10,15 +10,16 @@ from sqlalchemy import Column, Integer, String, DateTime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from .db import Base, get_session
+from ..utils.timezone import china_now_naive
 
 
 class UserModel(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True)
-    username = Column(String, unique=True, nullable=False)
-    password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)  # 用户ID
+    username = Column(String, unique=True, nullable=False)  # 用户名
+    password_hash = Column(String, nullable=False)  # 密码哈希
+    created_at = Column(DateTime, default=china_now_naive)  # 创建时间
 
     def to_dict(self):
         return {
@@ -64,7 +65,12 @@ class User(UserMixin):
                 session.add(model)
                 session.flush()
                 return cls(model.id, model.username, model.password_hash, model.created_at)
-        except Exception:
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"[User.create] 创建用户失败: {e}")
+            traceback.print_exc()
             return None
 
     def verify_password(self, password):

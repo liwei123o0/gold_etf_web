@@ -10,7 +10,7 @@ interface GlobalSettings {
 
 const DEFAULT_SETTINGS: GlobalSettings = {
   realtimeInterval: 60000,
-  simRealtimeInterval: 5000,
+  simRealtimeInterval: 90000,
   autoTradeInterval: 10000,
 }
 
