@@ -632,6 +632,12 @@ async def stop_autotrade_task(task_id: int, authorization: Optional[str] = Heade
         raise HTTPException(status_code=400, detail=result.get("error", "停止失败"))
     return result
 
+@app.get("/api/autotrade/strategies", tags=["自动交易"])
+async def list_autotrade_strategies():
+    """获取所有可用的交易策略"""
+    from backend.services.strategies import StrategyFactory
+    return StrategyFactory.list_all()
+
 @app.post("/api/autotrade/tasks/start-all", tags=["自动交易"])
 async def start_all_autotrade_tasks(authorization: Optional[str] = Header(None)):
     """启动所有自动交易任务"""

@@ -14,6 +14,7 @@ from backend.models.settings import SimSettings
 from backend.services import simulation_trade as st
 from backend.services import gold_data
 from backend.services import grid_trade
+from backend.services.strategies import StrategyFactory
 from backend.utils.timezone import china_now_naive
 
 logger = logging.getLogger(__name__)
@@ -189,30 +190,31 @@ class AutoTradeScheduler:
             if df is not None and len(df) >= 20:
                 latest = df.iloc[-1]
                 close = float(latest["收盘"])
-                if strategy == "ma_trend":
-                    signal = grid_trade.get_ma_trend_signal(
-                        latest,
-                        fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
-                        slow_ma_key=task_cfg.get("trend_ma_key") or "MA20",
-                        position_size=task_cfg.get("position_size", 1.0),
-                    )
-                else:
-                    grid_count = task_cfg.get("grid_count", 10)
-                    grid_spread = task_cfg.get("grid_spread", 0.10)
-                    base_ma_key = task_cfg.get("base_ma_key", "MA20")
-                    macd_ma_key = task_cfg.get("macd_ma_key")
-                    macd_hist_mean = None
-                    if macd_ma_key and "MACD_HIST" in df.columns:
-                        window = 20
-                        macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
-                    signal = grid_trade.get_grid_signal(
-                        latest,
-                        grid_count=grid_count,
-                        grid_spread=grid_spread,
-                        ma_key=base_ma_key,
-                        macd_ma_key=macd_ma_key,
-                        macd_hist_mean=macd_hist_mean,
-                    )
+                try:
+                    strategy_obj = StrategyFactory.get(strategy)
+                    signal = strategy_obj.calc_signal(latest, df, task_cfg)
+                except ValueError:
+                    if strategy == "ma_trend":
+                        signal = grid_trade.get_ma_trend_signal(
+                            latest,
+                            fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
+                            slow_ma_key=task_cfg.get("trend_ma_key") or "MA20",
+                            position_size=task_cfg.get("position_size", 1.0),
+                        )
+                    else:
+                        macd_hist_mean = None
+                        macd_ma_key = task_cfg.get("macd_ma_key")
+                        if macd_ma_key and "MACD_HIST" in df.columns:
+                            window = 20
+                            macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
+                        signal = grid_trade.get_grid_signal(
+                            latest,
+                            grid_count=task_cfg.get("grid_count", 10),
+                            grid_spread=task_cfg.get("grid_spread", 0.10),
+                            ma_key=task_cfg.get("base_ma_key", "MA20"),
+                            macd_ma_key=macd_ma_key,
+                            macd_hist_mean=macd_hist_mean,
+                        )
                 signal_str = signal.get("signal", "观望")
                 logger.debug(f"[OffHours] {user_id}/{symbol} 非交易时间，信号={signal_str}")
             else:
@@ -237,15 +239,173 @@ class AutoTradeScheduler:
         return False
 
     @classmethod
-    async def _check_and_trade(cls, task_cfg: dict, data_cache: Dict[str, Any] = None) -> None:
+    def _get_sim_position(cls, user_id: int, symbol: str, portfolio: dict = None) -> dict:
+        if portfolio is None:
+            portfolio = st.get_portfolio(user_id)
+        sim_positions = {p["symbol"]: p for p in (portfolio.get("positions", []) if portfolio else [])}
+        pos = sim_positions.get(symbol, {})
+        return {
+            "shares": int(pos.get("shares", 0)) or 0,
+            "avg_cost": float(pos.get("avg_cost", 0)) or 0,
+        }
+
+    @classmethod
+    def _calc_task_cash(cls, allocated_funds: float, cur_shares: int, cur_avg_cost: float) -> float:
+        position_value = cur_shares * cur_avg_cost if cur_shares > 0 else 0
+        return allocated_funds - position_value
+
+    @classmethod
+    async def _check_stop_loss_take_profit(cls, task_cfg, close, cur_shares, cur_avg_cost) -> Optional[str]:
+        if cur_shares <= 0 or cur_avg_cost <= 0:
+            return None
+        stop_loss_pct = task_cfg.get("stop_loss_pct", -5.0)
+        take_profit_pct = task_cfg.get("take_profit_pct", 10.0)
+        total_pnl_pct = (close - cur_avg_cost) / cur_avg_cost * 100
         user_id = task_cfg["user_id"]
         symbol = task_cfg["symbol"]
 
-        strategy = task_cfg.get("strategy", "grid")
+        if total_pnl_pct <= stop_loss_pct:
+            logger.warning(f"[StopLoss] {user_id}/{symbol} 触发止损 ({total_pnl_pct:.1f}% ≤ {stop_loss_pct:.1f}%)")
+            await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
+                                            f"止损触发 ({total_pnl_pct:.1f}%)", "stop_loss")
+            AutoTradeTask.record_trade(task_cfg["id"], "sell")
+            return "stop_loss"
+
+        if total_pnl_pct >= take_profit_pct:
+            logger.info(f"[TakeProfit] {user_id}/{symbol} 触发止盈 ({total_pnl_pct:.1f}% ≥ {take_profit_pct:.1f}%)")
+            await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
+                                            f"止盈触发 ({total_pnl_pct:.1f}%)", "take_profit")
+            AutoTradeTask.record_trade(task_cfg["id"], "sell")
+            return "take_profit"
+
+        return None
+
+    @classmethod
+    def _calc_trade_signal(cls, task_cfg, latest, df) -> dict:
+        try:
+            strategy = StrategyFactory.get(task_cfg.get("strategy", "grid"))
+            return strategy.calc_signal(latest, df, task_cfg)
+        except ValueError:
+            if task_cfg.get("strategy") == "ma_trend":
+                return grid_trade.get_ma_trend_signal(
+                    latest,
+                    fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
+                    slow_ma_key=task_cfg.get("trend_ma_key") or "MA20",
+                    position_size=task_cfg.get("position_size", 1.0),
+                )
+            macd_hist_mean = None
+            macd_ma_key = task_cfg.get("macd_ma_key")
+            if macd_ma_key and "MACD_HIST" in df.columns:
+                window = 20
+                macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
+            return grid_trade.get_grid_signal(
+                latest,
+                grid_count=task_cfg.get("grid_count", 10),
+                grid_spread=task_cfg.get("grid_spread", 0.10),
+                ma_key=task_cfg.get("base_ma_key", "MA20"),
+                macd_ma_key=macd_ma_key,
+                macd_hist_mean=macd_hist_mean,
+            )
+
+    @classmethod
+    def _apply_trend_filter(cls, signal, trend_above, trend_ma_key, user_id, symbol) -> dict:
+        if trend_above is not None and signal["signal"] in ("买入", "卖出"):
+            if not trend_above and signal["signal"] == "买入":
+                logger.info(f"[TrendFilter] {user_id}/{symbol} 价格低于{trend_ma_key}，过滤买入信号")
+                signal["signal"] = "观望"
+                signal["action_desc"] = f"价格低于{trend_ma_key}，逆势不买入"
+            elif trend_above and signal["signal"] == "卖出":
+                logger.info(f"[TrendFilter] {user_id}/{symbol} 价格高于{trend_ma_key}，过滤卖出信号")
+                signal["signal"] = "观望"
+                signal["action_desc"] = f"价格高于{trend_ma_key}，逆势不卖出"
+        return signal
+
+    @classmethod
+    def _calc_position_delta(cls, task_cfg, signal, close, cur_shares, allocated_funds) -> Optional[dict]:
+        position_ratio = signal.get("position_ratio", 0.5)
         position_size = task_cfg.get("position_size", 1.0)
-        stop_loss_pct = task_cfg.get("stop_loss_pct", -5.0)
-        take_profit_pct = task_cfg.get("take_profit_pct", 10.0)
-        trend_ma_key = task_cfg.get("trend_ma_key")
+        max_position_ratio = position_size
+        effective_ratio = round(min(position_ratio, max_position_ratio), 4)
+        target_market_value = allocated_funds * effective_ratio
+        current_market_value = cur_shares * close
+        value_diff = target_market_value - current_market_value
+        current_position_ratio = current_market_value / allocated_funds if allocated_funds > 0 else 0
+
+        POSITION_MATCH_TOLERANCE = 0.03
+        if abs(current_position_ratio - effective_ratio) < POSITION_MATCH_TOLERANCE:
+            logger.debug(f"[PositionMatch] {task_cfg['user_id']}/{task_cfg['symbol']} 当前仓位 {current_position_ratio:.2%} ≈ 建议 {effective_ratio:.2%}，无需调仓")
+            return None
+
+        min_step_value = max(allocated_funds * MIN_STEP_VALUE_PCT, 100 * close)
+        if abs(value_diff) < min_step_value:
+            logger.debug(f"[StepGuard] {task_cfg['user_id']}/{task_cfg['symbol']} 仓位偏差金额 {value_diff:.2f} < 最小阈值 {min_step_value:.2f}，跳过")
+            return None
+
+        return {
+            "value_diff": value_diff,
+            "effective_ratio": effective_ratio,
+            "current_position_ratio": current_position_ratio,
+        }
+
+    @classmethod
+    def _execute_order(cls, task_cfg, delta, close, cur_shares, allocated_funds, trade_name, settings) -> Optional[dict]:
+        user_id = task_cfg["user_id"]
+        symbol = task_cfg["symbol"]
+        value_diff = delta["value_diff"]
+        commission_rate = settings.get("commission_rate", 0.0003)
+        min_commission = settings.get("min_commission", 5.0)
+        stamp_tax_rate = settings.get("stamp_tax_rate", 0.001)
+        transfer_fee_rate = settings.get("transfer_fee_rate", 0.00002)
+
+        sim_pos = cls._get_sim_position(user_id, symbol)
+        cur_shares = sim_pos["shares"]
+        cur_avg_cost = sim_pos["avg_cost"]
+        task_cash = cls._calc_task_cash(allocated_funds, cur_shares, cur_avg_cost)
+
+        if value_diff > 0:
+            shares = int(round(value_diff / close / 100)) * 100
+            if shares < 100:
+                return None
+            amount = close * shares
+            commission_est = max(amount * commission_rate, min_commission)
+            if task_cash < (amount + commission_est):
+                logger.warning(f"[CashGuard] {user_id}/{symbol} 任务现金不足 task_cash={task_cash:.2f} < need={amount + commission_est:.2f}")
+                return None
+            result = st.execute_trade(user_id, "buy", symbol, trade_name, close, shares, trade_type="auto")
+            action_str = "买入"
+        else:
+            sell_amount = abs(value_diff)
+            shares = int(round(sell_amount / close / 100)) * 100
+            if shares < 100 or cur_shares < 100:
+                return None
+            shares = min(shares, cur_shares)
+            shares = (shares // 100) * 100
+            if shares < 100:
+                return None
+            result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type="auto")
+            action_str = "卖出"
+
+        if result.get("success"):
+            new_sim_pos = cls._get_sim_position(user_id, symbol)
+            new_task_cash = cls._calc_task_cash(allocated_funds, new_sim_pos["shares"], new_sim_pos["avg_cost"])
+            AutoTradeTask.update_runtime(
+                task_cfg["id"],
+                task_cash=new_task_cash,
+                task_pnl=0,
+                position_shares=new_sim_pos["shares"],
+                position_avg_cost=new_sim_pos["avg_cost"],
+                task_name=trade_name,
+            )
+            AutoTradeTask.record_trade(task_cfg["id"], action_str)
+            logger.info(f"[AutoTradeScheduler] {user_id}/{symbol} {action_str} {shares}股 @ {close:.4f}, 建议仓位={delta['effective_ratio']:.2%}, 当前仓位={delta['current_position_ratio']:.2%}, 偏差={value_diff:.2f}")
+            return {"action": action_str, "shares": shares, "close": close}
+
+        return None
+
+    @classmethod
+    async def _check_and_trade(cls, task_cfg: dict, data_cache: Dict[str, Any] = None) -> None:
+        user_id = task_cfg["user_id"]
+        symbol = task_cfg["symbol"]
 
         if data_cache and symbol in data_cache:
             df = data_cache[symbol]
@@ -256,215 +416,70 @@ class AutoTradeScheduler:
 
         latest = df.iloc[-1]
         close = float(latest["收盘"])
-
-        task_cash = task_cfg.get("task_cash", task_cfg.get("allocated_funds", 0))
-        task_pnl = task_cfg.get("task_pnl", 0)
-        cur_shares = task_cfg.get("position_shares", 0)
-        cur_avg_cost = task_cfg.get("position_avg_cost", 0)
-        unrealized = (close - cur_avg_cost) * cur_shares if cur_shares > 0 else 0
-        task_name = task_cfg.get("task_name", symbol)
         allocated_funds = task_cfg.get("allocated_funds", 0)
 
-        # ========== 1. 同步任务资金与模拟账户 ==========
         portfolio = st.get_portfolio(user_id)
-        if portfolio and portfolio.get("account"):
-            account_cash = float(portfolio["account"].get("cash", 0))
-            if account_cash <= 0 and task_cash > 0:
+        account_cash = float(portfolio["account"].get("cash", 0)) if portfolio and portfolio.get("account") else 0
+        if account_cash <= 0:
+            task_cash = task_cfg.get("task_cash", allocated_funds)
+            if task_cash > 0:
                 logger.warning(f"[Sync] {user_id}/{symbol} 模拟账户已无现金，暂停任务")
                 AutoTradeTask.update_enabled(task_cfg["id"], False)
                 return
 
-        # ========== 2. 止损 / 止盈 检查（不受冷却期限制）==========
-        if cur_shares > 0 and cur_avg_cost > 0:
-            total_pnl_pct = (close - cur_avg_cost) / cur_avg_cost * 100
+        sim_pos = cls._get_sim_position(user_id, symbol, portfolio)
+        cur_shares = sim_pos["shares"]
+        cur_avg_cost = sim_pos["avg_cost"]
+        task_cash = cls._calc_task_cash(allocated_funds, cur_shares, cur_avg_cost)
 
-            if total_pnl_pct <= stop_loss_pct:
-                logger.warning(f"[StopLoss] {user_id}/{symbol} 触发止损 ({total_pnl_pct:.1f}% ≤ {stop_loss_pct:.1f}%)")
-                await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
-                                                f"止损触发 ({total_pnl_pct:.1f}%)", "stop_loss")
-                AutoTradeTask.record_trade(task_cfg["id"], "sell")
-                return
+        sl_result = await cls._check_stop_loss_take_profit(task_cfg, close, cur_shares, cur_avg_cost)
+        if sl_result:
+            return
 
-            if total_pnl_pct >= take_profit_pct:
-                logger.info(f"[TakeProfit] {user_id}/{symbol} 触发止盈 ({total_pnl_pct:.1f}% ≥ {take_profit_pct:.1f}%)")
-                await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
-                                                f"止盈触发 ({total_pnl_pct:.1f}%)", "take_profit")
-                AutoTradeTask.record_trade(task_cfg["id"], "sell")
-                return
-
-        # ========== 3. 趋势过滤 ==========
+        trend_ma_key = task_cfg.get("trend_ma_key")
+        trend_above = None
         if trend_ma_key:
             trend_ma = float(latest.get(trend_ma_key, 0))
             if trend_ma > 0:
                 trend_above = close > trend_ma
-                pct_above = (close - trend_ma) / trend_ma * 100
-                logger.debug(f"[TrendFilter] {user_id}/{symbol} close={close:.4f}, {trend_ma_key}={trend_ma:.4f}, above={pct_above:+.2f}%")
-            else:
-                trend_above = None
-        else:
-            trend_above = None
 
-        # ========== 4. 策略信号计算 ==========
-        if strategy == "ma_trend":
-            signal = grid_trade.get_ma_trend_signal(
-                latest,
-                fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
-                slow_ma_key=trend_ma_key or "MA20",
-                position_size=position_size,
-            )
-        else:
-            grid_count = task_cfg.get("grid_count", 10)
-            grid_spread = task_cfg.get("grid_spread", 0.10)
-            base_ma_key = task_cfg.get("base_ma_key", "MA20")
-            macd_ma_key = task_cfg.get("macd_ma_key")
+        signal = cls._calc_trade_signal(task_cfg, latest, df)
+        signal = cls._apply_trend_filter(signal, trend_above, trend_ma_key, user_id, symbol)
 
-            macd_hist_mean = None
-            if macd_ma_key:
-                window = 20
-                macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
-
-            signal = grid_trade.get_grid_signal(
-                latest,
-                grid_count=grid_count,
-                grid_spread=grid_spread,
-                ma_key=base_ma_key,
-                macd_ma_key=macd_ma_key,
-                macd_hist_mean=macd_hist_mean,
-            )
-
-        # ========== 5. 趋势过滤修正信号 ==========
-        if trend_above is not None and signal["signal"] in ("买入", "卖出"):
-            if not trend_above and signal["signal"] == "买入":
-                logger.info(f"[TrendFilter] {user_id}/{symbol} 价格低于{trend_ma_key}，过滤买入信号")
-                signal["signal"] = "观望"
-                signal["action_desc"] = f"价格低于{trend_ma_key}，逆势不买入"
-            elif trend_above and signal["signal"] == "卖出":
-                logger.info(f"[TrendFilter] {user_id}/{symbol} 价格高于{trend_ma_key}，过滤卖出信号")
-                signal["signal"] = "观望"
-                signal["action_desc"] = f"价格高于{trend_ma_key}，逆势不卖出"
-
-        # ========== 6. 信号一致性确认（连续 N 次相同信号才执行）==========
         signal_confirmed = AutoTradeTask.update_consecutive_signals(
             task_cfg["id"], signal["signal"], CONSECUTIVE_SIGNALS_REQUIRED
         )
 
-        # ========== 7. 更新浮动盈亏 ==========
+        unrealized = (close - cur_avg_cost) * cur_shares if cur_shares > 0 else 0
         AutoTradeTask.update_runtime(
             task_cfg["id"],
             task_cash=task_cash,
-            task_pnl=task_pnl,
+            task_pnl=0,
             position_shares=cur_shares,
             position_avg_cost=cur_avg_cost,
             unrealized_pnl=unrealized,
-            task_name=task_name,
+            task_name=task_cfg.get("task_name", symbol),
         )
 
         if signal["signal"] not in ("买入", "卖出"):
             return
-
         if not signal_confirmed:
-            logger.debug(f"[SignalGuard] {user_id}/{symbol} 信号 '{signal['signal']}' 未连续{CONSECUTIVE_SIGNALS_REQUIRED}次，等待确认")
             return
-
-        # ========== 8. 冷却期检查 ==========
         if AutoTradeTask.is_in_cooldown(task_cfg["id"]):
-            cooldown = task_cfg.get("cooldown_seconds", 60)
-            logger.debug(f"[Cooldown] {user_id}/{symbol} 在冷却期内 ({cooldown}s)，跳过交易")
             return
-
-        # ========== 9. 每日交易上限检查 ==========
         if not AutoTradeTask.can_trade_today(task_cfg["id"]):
-            max_trades = task_cfg.get("max_daily_trades", 50)
-            logger.warning(f"[DailyLimit] {user_id}/{symbol} 已达今日交易上限 ({max_trades}次)，跳过")
             return
 
-        trade_name = latest.get("名称", symbol)
-        if not trade_name or trade_name == symbol:
-            trade_name = symbol
-
-        # ========== 10. 计算仓位偏差和调仓数量 ==========
-        position_ratio = signal.get("position_ratio", 0.5)
-
-        max_position_ratio = position_size
-        effective_ratio = round(min(position_ratio, max_position_ratio), 4)
-
-        target_market_value = allocated_funds * effective_ratio
-        current_market_value = cur_shares * close
-        value_diff = target_market_value - current_market_value
-
-        current_position_ratio = current_market_value / allocated_funds if allocated_funds > 0 else 0
-
-        POSITION_MATCH_TOLERANCE = 0.03
-        if abs(current_position_ratio - effective_ratio) < POSITION_MATCH_TOLERANCE:
-            logger.debug(f"[PositionMatch] {user_id}/{symbol} 当前仓位 {current_position_ratio:.2%} ≈ 建议 {effective_ratio:.2%}，无需调仓")
+        delta = cls._calc_position_delta(task_cfg, signal, close, cur_shares, allocated_funds)
+        if delta is None:
             return
 
+        trade_name = latest.get("名称", symbol) or symbol
         settings = SimSettings.get(symbol)
-        commission_rate = settings.get("commission_rate", 0.0003)
-        min_commission = settings.get("min_commission", 5.0)
-        stamp_tax_rate = settings.get("stamp_tax_rate", 0.001)
-        transfer_fee_rate = settings.get("transfer_fee_rate", 0.00002)
-
-        min_step_value = max(allocated_funds * MIN_STEP_VALUE_PCT, 100 * close)
-        if abs(value_diff) < min_step_value:
-            logger.debug(f"[StepGuard] {user_id}/{symbol} 仓位偏差金额 {value_diff:.2f} < 最小阈值 {min_step_value:.2f}，跳过")
-            return
-
-        # ========== 11. 执行交易 ==========
-        if value_diff > 0:
-            buy_amount = value_diff
-            shares = int(round(buy_amount / close / 100)) * 100
-            if shares < 100:
-                return
-            amount = close * shares
-            commission_est = max(amount * commission_rate, min_commission)
-            if task_cash < (amount + commission_est):
-                logger.warning(f"[CashGuard] {user_id}/{symbol} 任务现金不足 task_cash={task_cash:.2f} < need={amount + commission_est:.2f}")
-                return
-            task_cash -= (amount + commission_est)
-            total_cost = cur_avg_cost * cur_shares + amount
-            cur_shares += shares
-            cur_avg_cost = total_cost / cur_shares if cur_shares > 0 else close
-            result = st.execute_trade(user_id, "buy", symbol, trade_name, close, shares, trade_type="auto")
-            action_str = "买入"
-        else:
-            sell_amount = abs(value_diff)
-            shares = int(round(sell_amount / close / 100)) * 100
-            if shares < 100 or cur_shares < 100:
-                return
-            shares = min(shares, cur_shares)
-            shares = (shares // 100) * 100
-            if shares < 100:
-                return
-            result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type="auto")
-            if result.get("success"):
-                sell_proceeds = close * shares
-                stamp_tax = sell_proceeds * stamp_tax_rate
-                transfer_fee = sell_proceeds * transfer_fee_rate if symbol.startswith("sh") else 0
-                net_proceeds = sell_proceeds - max(sell_proceeds * commission_rate, min_commission) - stamp_tax - transfer_fee
-                task_cash += net_proceeds
-                pnl = net_proceeds - cur_avg_cost * shares
-                task_pnl += pnl
-                cur_shares -= shares
-                if cur_shares == 0:
-                    cur_avg_cost = 0
-            action_str = "卖出"
-
-        if result.get("success"):
-            logger.info(f"[AutoTradeScheduler] {user_id}/{symbol} {action_str} {shares}股 @ {close:.4f}, 建议仓位={effective_ratio:.2%}, 当前仓位={current_position_ratio:.2%}, 偏差={value_diff:.2f}")
-            AutoTradeTask.update_runtime(
-                user_id, symbol,
-                task_cash=task_cash,
-                task_pnl=task_pnl,
-                position_shares=cur_shares,
-                position_avg_cost=cur_avg_cost,
-                task_name=trade_name,
-            )
-            AutoTradeTask.record_trade(task_cfg["id"], action_str)
+        cls._execute_order(task_cfg, delta, close, cur_shares, allocated_funds, trade_name, settings)
 
     @classmethod
     async def _force_close_position(cls, user_id, symbol, close, shares, task_cfg, reason, close_type):
-        """强制清仓（止损/止盈触发时调用）"""
         if shares < 100:
             return
 
@@ -476,31 +491,19 @@ class AutoTradeScheduler:
         result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type="auto")
 
         if result.get("success"):
-            settings = SimSettings.get(symbol)
-            commission_rate = settings.get("commission_rate", 0.0003)
-            min_commission = settings.get("min_commission", 5.0)
-            stamp_tax_rate = settings.get("stamp_tax_rate", 0.001)
-            transfer_fee_rate = settings.get("transfer_fee_rate", 0.00002)
-
-            sell_proceeds = close * shares
-            stamp_tax = sell_proceeds * stamp_tax_rate
-            transfer_fee = sell_proceeds * transfer_fee_rate if symbol.startswith("sh") else 0
-            net_proceeds = sell_proceeds - max(sell_proceeds * commission_rate, min_commission) - stamp_tax - transfer_fee
-
-            cur_avg_cost = task_cfg.get("position_avg_cost", 0)
-            pnl = net_proceeds - cur_avg_cost * shares
-            new_cash = task_cfg.get("task_cash", 0) + net_proceeds
-            new_pnl = task_cfg.get("task_pnl", 0) + pnl
+            allocated_funds = task_cfg.get("allocated_funds", 0)
+            new_sim_pos = cls._get_sim_position(user_id, symbol)
+            new_task_cash = cls._calc_task_cash(allocated_funds, new_sim_pos["shares"], new_sim_pos["avg_cost"])
 
             AutoTradeTask.update_runtime(
-                user_id, symbol,
-                task_cash=new_cash,
-                task_pnl=new_pnl,
-                position_shares=0,
-                position_avg_cost=0,
+                task_cfg["id"],
+                task_cash=new_task_cash,
+                task_pnl=0,
+                position_shares=new_sim_pos["shares"],
+                position_avg_cost=new_sim_pos["avg_cost"],
                 task_name=task_cfg.get("task_name", symbol),
             )
-            logger.warning(f"[{close_type.upper()}] {user_id}/{symbol} 已清仓 {shares}股 @ {close:.4f}, 盈亏={pnl:.2f}, 原因={reason}")
+            logger.warning(f"[{close_type.upper()}] {user_id}/{symbol} 已清仓 {shares}股 @ {close:.4f}, 原因={reason}")
         else:
             logger.error(f"[{close_type.upper()}] {user_id}/{symbol} 清仓失败: {result.get('error', '')}")
 
@@ -602,32 +605,31 @@ class AutoTradeScheduler:
 
             strategy = task_cfg.get("strategy", "grid")
 
-            if strategy == "ma_trend":
-                signal = grid_trade.get_ma_trend_signal(
-                    latest,
-                    fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
-                    slow_ma_key=task_cfg.get("trend_ma_key") or "MA20",
-                    position_size=task_cfg.get("position_size", 1.0),
-                )
-            else:
-                grid_count = task_cfg.get("grid_count", 10)
-                grid_spread = task_cfg.get("grid_spread", 0.10)
-                base_ma_key = task_cfg.get("base_ma_key", "MA20")
-                macd_ma_key = task_cfg.get("macd_ma_key")
-
-                macd_hist_mean = None
-                if macd_ma_key and "MACD_HIST" in df.columns:
-                    window = 20
-                    macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
-
-                signal = grid_trade.get_grid_signal(
-                    latest,
-                    grid_count=grid_count,
-                    grid_spread=grid_spread,
-                    ma_key=base_ma_key,
-                    macd_ma_key=macd_ma_key,
-                    macd_hist_mean=macd_hist_mean,
-                )
+            try:
+                strategy_obj = StrategyFactory.get(strategy)
+                signal = strategy_obj.calc_signal(latest, df, task_cfg)
+            except ValueError:
+                if strategy == "ma_trend":
+                    signal = grid_trade.get_ma_trend_signal(
+                        latest,
+                        fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
+                        slow_ma_key=task_cfg.get("trend_ma_key") or "MA20",
+                        position_size=task_cfg.get("position_size", 1.0),
+                    )
+                else:
+                    macd_hist_mean = None
+                    macd_ma_key = task_cfg.get("macd_ma_key")
+                    if macd_ma_key and "MACD_HIST" in df.columns:
+                        window = 20
+                        macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
+                    signal = grid_trade.get_grid_signal(
+                        latest,
+                        grid_count=task_cfg.get("grid_count", 10),
+                        grid_spread=task_cfg.get("grid_spread", 0.10),
+                        ma_key=task_cfg.get("base_ma_key", "MA20"),
+                        macd_ma_key=macd_ma_key,
+                        macd_hist_mean=macd_hist_mean,
+                    )
 
             signal["close"] = close
             return signal
