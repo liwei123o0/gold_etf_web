@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, func, text
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Boolean, func, text, UniqueConstraint
 
 from .db import Base, get_session
 from ..utils.timezone import china_now_naive
@@ -10,10 +10,14 @@ from ..utils.timezone import china_now_naive
 
 class AutoTradeTaskModel(Base):
     __tablename__ = "auto_trade_tasks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "symbol", "strategy", name="uq_user_symbol_strategy"),
+    )
 
-    user_id = Column(Integer, primary_key=True)  # 用户ID
-    symbol = Column(String, primary_key=True)  # 股票代码
-    strategy = Column(String, nullable=False, default="grid")  # 交易策略(grid/ma_trend)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    symbol = Column(String, nullable=False)
+    strategy = Column(String, nullable=False, default="grid")
     grid_count = Column(Integer, default=10)  # 网格数量
     grid_spread = Column(Numeric, default=0.10)  # 网格间距(百分比)
     base_ma_key = Column(String, default="MA20")  # 基础均线周期(MA5/MA10/MA20等)
@@ -51,6 +55,7 @@ class AutoTradeTask:
         if row is None:
             return None
         return {
+            "id": row.id,
             "user_id": row.user_id,
             "symbol": row.symbol,
             "strategy": row.strategy,
@@ -91,7 +96,7 @@ class AutoTradeTask:
             rows = (
                 session.query(AutoTradeTaskModel)
                 .filter(AutoTradeTaskModel.user_id == user_id)
-                .order_by(AutoTradeTaskModel.symbol)
+                .order_by(AutoTradeTaskModel.created_at.desc())
                 .all()
             )
             return [cls.from_row(r) for r in rows]
@@ -111,7 +116,7 @@ class AutoTradeTask:
             rows = (
                 session.query(AutoTradeTaskModel)
                 .filter(AutoTradeTaskModel.enabled == True)
-                .order_by(AutoTradeTaskModel.user_id, AutoTradeTaskModel.symbol)
+                .order_by(AutoTradeTaskModel.created_at.desc())
                 .all()
             )
             return [cls.from_row(r) for r in rows]
@@ -122,6 +127,7 @@ class AutoTradeTask:
             existing = session.query(AutoTradeTaskModel).filter(
                 AutoTradeTaskModel.user_id == user_id,
                 AutoTradeTaskModel.symbol == symbol,
+                AutoTradeTaskModel.strategy == config.get("strategy", "grid"),
             ).first()
             if existing:
                 existing.strategy = config.get("strategy", existing.strategy)
@@ -135,10 +141,7 @@ class AutoTradeTask:
                 existing.enabled = config.get("enabled", existing.enabled)
                 existing.last_check = config.get("last_check", existing.last_check)
                 existing.last_signal = config.get("last_signal", existing.last_signal)
-                existing.task_cash = config.get("task_cash", existing.task_cash)
                 existing.task_pnl = config.get("task_pnl", existing.task_pnl)
-                existing.position_shares = config.get("position_shares", existing.position_shares)
-                existing.position_avg_cost = config.get("position_avg_cost", existing.position_avg_cost)
                 existing.unrealized_pnl = config.get("unrealized_pnl", existing.unrealized_pnl)
                 existing.task_name = config.get("task_name", existing.task_name)
                 existing.stop_loss_pct = config.get("stop_loss_pct", existing.stop_loss_pct)
@@ -147,8 +150,23 @@ class AutoTradeTask:
                 existing.dynamic_interval = config.get("dynamic_interval", existing.dynamic_interval)
                 existing.cooldown_seconds = config.get("cooldown_seconds", existing.cooldown_seconds)
                 existing.max_daily_trades = config.get("max_daily_trades", existing.max_daily_trades)
+
+                if "position_shares" in config or "position_avg_cost" in config:
+                    existing.position_shares = config.get("position_shares", existing.position_shares)
+                    existing.position_avg_cost = config.get("position_avg_cost", existing.position_avg_cost)
+                    position_value = existing.position_shares * existing.position_avg_cost if existing.position_shares > 0 and existing.position_avg_cost > 0 else 0
+                    existing.task_cash = existing.allocated_funds - position_value
+
                 existing.updated_at = china_now_naive()
+                session.flush()
+                return existing.id
             else:
+                position_shares = config.get("position_shares", 0)
+                position_avg_cost = config.get("position_avg_cost", 0)
+                allocated_funds = config.get("allocated_funds", 0)
+                position_value = position_shares * position_avg_cost if position_shares > 0 and position_avg_cost > 0 else 0
+                task_cash = config.get("task_cash", allocated_funds - position_value)
+                
                 model = AutoTradeTaskModel(
                     user_id=user_id,
                     symbol=symbol,
@@ -159,14 +177,14 @@ class AutoTradeTask:
                     macd_ma_key=config.get("macd_ma_key"),
                     position_size=config.get("position_size", 1.0),
                     check_interval=config.get("check_interval", 30),
-                    allocated_funds=config.get("allocated_funds", 0),
+                    allocated_funds=allocated_funds,
                     enabled=config.get("enabled", False),
                     last_check=config.get("last_check"),
                     last_signal=config.get("last_signal"),
-                    task_cash=config.get("task_cash", config.get("allocated_funds", 0)),
+                    task_cash=task_cash,
                     task_pnl=config.get("task_pnl", 0),
-                    position_shares=config.get("position_shares", 0),
-                    position_avg_cost=config.get("position_avg_cost", 0),
+                    position_shares=position_shares,
+                    position_avg_cost=position_avg_cost,
                     unrealized_pnl=config.get("unrealized_pnl", 0),
                     stop_loss_pct=config.get("stop_loss_pct", -5.0),
                     take_profit_pct=config.get("take_profit_pct", 10.0),
@@ -177,24 +195,26 @@ class AutoTradeTask:
                     updated_at=china_now_naive(),
                 )
                 session.add(model)
+                session.flush()
+                return model.id
 
     @classmethod
-    def update_enabled(cls, user_id, symbol, enabled: bool):
+    def update_enabled(cls, task_id, enabled: bool):
         with get_session() as session:
             existing = session.query(AutoTradeTaskModel).filter(
-                AutoTradeTaskModel.user_id == user_id,
-                AutoTradeTaskModel.symbol == symbol,
+                AutoTradeTaskModel.id == task_id,
             ).first()
             if existing:
                 existing.enabled = enabled
                 existing.updated_at = china_now_naive()
-            else:
-                model = AutoTradeTaskModel(
-                    user_id=user_id,
-                    symbol=symbol,
-                    enabled=enabled,
-                )
-                session.add(model)
+
+    @classmethod
+    def find_by_id(cls, task_id):
+        with get_session() as session:
+            row = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.id == task_id,
+            ).first()
+            return cls.from_row(row) if row else None
 
     @classmethod
     def update_last_check(cls, user_id, symbol, last_signal: str = None):
@@ -241,7 +261,14 @@ class AutoTradeTask:
             return float(result)
 
     @classmethod
-    def delete_task(cls, user_id, symbol):
+    def delete_task(cls, task_id):
+        with get_session() as session:
+            session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.id == task_id,
+            ).delete()
+
+    @classmethod
+    def delete_task_by_symbol(cls, user_id, symbol):
         with get_session() as session:
             session.query(AutoTradeTaskModel).filter(
                 AutoTradeTaskModel.user_id == user_id,
@@ -329,20 +356,33 @@ class AutoTradeTask:
         from sqlalchemy import inspect
         inspector = inspect(engine)
         columns = [c["name"] for c in inspector.get_columns("auto_trade_tasks")]
-        new_cols = {
-            "stop_loss_pct": "NUMERIC DEFAULT -5.0",
-            "take_profit_pct": "NUMERIC DEFAULT 10.0",
-            "trend_ma_key": "VARCHAR",
-            "dynamic_interval": "BOOLEAN DEFAULT FALSE",
-            "last_trade_time": "TIMESTAMP",
-            "last_trade_direction": "VARCHAR",
-            "trade_count_today": "INTEGER DEFAULT 0",
-            "last_trade_date": "VARCHAR",
-            "consecutive_signals": "INTEGER DEFAULT 0",
-            "cooldown_seconds": "INTEGER DEFAULT 60",
-            "max_daily_trades": "INTEGER DEFAULT 50",
-        }
+        
         with engine.connect() as conn:
+            if "id" not in columns:
+                conn.execute(text("ALTER TABLE auto_trade_tasks ADD COLUMN id SERIAL PRIMARY KEY"))
+            
+            indexes = inspector.get_indexes("auto_trade_tasks")
+            index_names = [idx["name"] for idx in indexes]
+            unique_constraints = [c["name"] for c in inspector.get_unique_constraints("auto_trade_tasks")]
+            if "uq_user_symbol_strategy" not in index_names and "uq_user_symbol_strategy" not in unique_constraints:
+                conn.execute(text(
+                    "ALTER TABLE auto_trade_tasks ADD CONSTRAINT uq_user_symbol_strategy "
+                    "UNIQUE (user_id, symbol, strategy)"
+                ))
+            
+            new_cols = {
+                "stop_loss_pct": "NUMERIC DEFAULT -5.0",
+                "take_profit_pct": "NUMERIC DEFAULT 10.0",
+                "trend_ma_key": "VARCHAR",
+                "dynamic_interval": "BOOLEAN DEFAULT FALSE",
+                "last_trade_time": "TIMESTAMP",
+                "last_trade_direction": "VARCHAR",
+                "trade_count_today": "INTEGER DEFAULT 0",
+                "last_trade_date": "VARCHAR",
+                "consecutive_signals": "INTEGER DEFAULT 0",
+                "cooldown_seconds": "INTEGER DEFAULT 60",
+                "max_daily_trades": "INTEGER DEFAULT 50",
+            }
             for col_name, col_type in new_cols.items():
                 if col_name not in columns:
                     conn.execute(text(f"ALTER TABLE auto_trade_tasks ADD COLUMN {col_name} {col_type}"))

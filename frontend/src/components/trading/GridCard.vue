@@ -57,7 +57,7 @@ const atrDisplay = computed(() => {
   const g = currentGrid.value
   if (!g?.atr) return { text: '无数据', color: 'var(--text-muted)' }
   return {
-    text: `${g.atr.toFixed(4)} (${g.atr_pct?.toFixed(2)}%)`,
+    text: `${g.atr.toFixed(4)} (${g.atr_pct != null ? g.atr_pct.toFixed(2) : '-'}%)`,
     color: 'var(--accent-purple)'
   }
 })

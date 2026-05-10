@@ -11,9 +11,48 @@ from typing import Optional
 import sys
 import os
 import logging
+from logging.handlers import TimedRotatingFileHandler
 
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# ==================== 日志配置 ====================
+def setup_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # 移除默认处理器
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # 控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+    
+    # 文件处理器（按天分割）
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        os.path.join(log_dir, 'app.log'),
+        when='D',
+        backupCount=7,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+setup_logging()
 
 from backend.models.schemas import (
     HealthResponse,
@@ -38,6 +77,8 @@ from backend.core.security import (
 # ==================== 启动信息 ====================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger = logging.getLogger(__name__)
+    
     # ---------- 启动逻辑 ----------
     from backend.models.db import engine, Base
     from backend.models.user import UserModel
@@ -55,23 +96,23 @@ async def lifespan(app: FastAPI):
 
     enabled_tasks = AutoTradeTask.find_all_enabled()
 
-    print("=" * 50)
-    print("黄金ETF技术分析系统 API v2.0 (SQLAlchemy ORM)")
-    print("后端启动成功!")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info("黄金ETF技术分析系统 API v2.0 (SQLAlchemy ORM)")
+    logger.info("后端启动成功!")
+    logger.info("=" * 50)
 
     if enabled_tasks:
-        print(f"[Scheduler] 检测到 {len(enabled_tasks)} 个已启用任务，启动调度器")
+        logger.info(f"[Scheduler] 检测到 {len(enabled_tasks)} 个已启用任务，启动调度器")
         await AutoTradeScheduler.start()
     else:
-        print("[Scheduler] 无已启用任务，调度器待命（将在首个任务启动时自动激活）")
+        logger.info("[Scheduler] 无已启用任务，调度器待命（将在首个任务启动时自动激活）")
 
     yield
 
     if AutoTradeScheduler.is_running():
-        print("[Scheduler] 正在停止调度器...")
+        logger.info("[Scheduler] 正在停止调度器...")
         await AutoTradeScheduler.stop()
-    print("系统已关闭")
+    logger.info("系统已关闭")
 
 # ==================== FastAPI App ====================
 
@@ -549,44 +590,44 @@ async def create_autotrade_task(request: dict, authorization: Optional[str] = He
     result = await AutoTradeService.add_task(user_info["user_id"], symbol, request)
     return result
 
-@app.delete("/api/autotrade/tasks/{symbol}", tags=["自动交易"])
-async def delete_autotrade_task(symbol: str, authorization: Optional[str] = Header(None)):
+@app.delete("/api/autotrade/tasks/{task_id}", tags=["自动交易"])
+async def delete_autotrade_task(task_id: int, authorization: Optional[str] = Header(None)):
     """删除自动交易任务"""
     user_info = _get_user(authorization)
     if not user_info:
         raise HTTPException(status_code=401, detail="未登录")
-    result = await AutoTradeService.delete_task(user_info["user_id"], symbol.lower())
+    result = await AutoTradeService.delete_task(task_id)
     return result
 
-@app.put("/api/autotrade/tasks/{symbol}", tags=["自动交易"])
-async def update_autotrade_task(symbol: str, request: dict, authorization: Optional[str] = Header(None)):
+@app.put("/api/autotrade/tasks/{task_id}", tags=["自动交易"])
+async def update_autotrade_task(task_id: int, request: dict, authorization: Optional[str] = Header(None)):
     """更新自动交易任务配置"""
     user_info = _get_user(authorization)
     if not user_info:
         raise HTTPException(status_code=401, detail="未登录")
-    result = AutoTradeService.update_task_config(user_info["user_id"], symbol.lower(), request)
+    result = AutoTradeService.update_task_config(task_id, request)
     if not result.get("success"):
         raise HTTPException(status_code=404, detail=result.get("error", "任务不存在"))
     return result
 
-@app.post("/api/autotrade/tasks/{symbol}/start", tags=["自动交易"])
-async def start_autotrade_task(symbol: str, authorization: Optional[str] = Header(None)):
+@app.post("/api/autotrade/tasks/{task_id}/start", tags=["自动交易"])
+async def start_autotrade_task(task_id: int, authorization: Optional[str] = Header(None)):
     """启动单个自动交易任务"""
     user_info = _get_user(authorization)
     if not user_info:
         raise HTTPException(status_code=401, detail="未登录")
-    result = await AutoTradeService.start_task(user_info["user_id"], symbol.lower())
+    result = await AutoTradeService.start_task(task_id)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "启动失败"))
     return result
 
-@app.post("/api/autotrade/tasks/{symbol}/stop", tags=["自动交易"])
-async def stop_autotrade_task(symbol: str, authorization: Optional[str] = Header(None)):
+@app.post("/api/autotrade/tasks/{task_id}/stop", tags=["自动交易"])
+async def stop_autotrade_task(task_id: int, authorization: Optional[str] = Header(None)):
     """停止单个自动交易任务"""
     user_info = _get_user(authorization)
     if not user_info:
         raise HTTPException(status_code=401, detail="未登录")
-    result = await AutoTradeService.stop_task(user_info["user_id"], symbol.lower())
+    result = await AutoTradeService.stop_task(task_id)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "停止失败"))
     return result

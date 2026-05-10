@@ -5,13 +5,11 @@ const STORAGE_KEY = 'global_settings'
 interface GlobalSettings {
   realtimeInterval: number    // 实时行情轮询间隔(ms)
   simRealtimeInterval: number // 模拟交易行情轮询间隔(ms)
-  autoTradeInterval: number   // 自动交易检查间隔(s)
 }
 
 const DEFAULT_SETTINGS: GlobalSettings = {
   realtimeInterval: 60000,
   simRealtimeInterval: 90000,
-  autoTradeInterval: 10000,
 }
 
 function loadFromStorage(): GlobalSettings {

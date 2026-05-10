@@ -332,23 +332,23 @@ export const stockService = {
     return response.data
   },
 
-  async updateAutoTradeTask(symbol: string, config: Partial<AutoTradeTask>): Promise<TaskStatus> {
-    const response = await api.put<TaskStatus>(`/autotrade/tasks/${symbol}`, config)
+  async updateAutoTradeTask(taskId: number, config: Partial<AutoTradeTask>): Promise<TaskStatus> {
+    const response = await api.put<TaskStatus>(`/autotrade/tasks/${taskId}`, config)
     return response.data
   },
 
-  async deleteAutoTradeTask(symbol: string): Promise<any> {
-    const response = await api.delete<any>(`/autotrade/tasks/${symbol}`)
+  async deleteAutoTradeTask(taskId: number): Promise<any> {
+    const response = await api.delete<any>(`/autotrade/tasks/${taskId}`)
     return response.data
   },
 
-  async startAutoTradeTask(symbol: string): Promise<any> {
-    const response = await api.post<any>(`/autotrade/tasks/${symbol}/start`, {})
+  async startAutoTradeTask(taskId: number): Promise<any> {
+    const response = await api.post<any>(`/autotrade/tasks/${taskId}/start`, {})
     return response.data
   },
 
-  async stopAutoTradeTask(symbol: string): Promise<any> {
-    const response = await api.post<any>(`/autotrade/tasks/${symbol}/stop`, {})
+  async stopAutoTradeTask(taskId: number): Promise<any> {
+    const response = await api.post<any>(`/autotrade/tasks/${taskId}/stop`, {})
     return response.data
   },
 
@@ -370,33 +370,8 @@ export interface SimSettings {
   transfer_fee_rate: number
 }
 
-export interface GridSignal {
-  signal_name: string
-  signal: string
-  signal_text: string
-  close: number
-  ma_key: string
-  ma_val: number
-  ma_deviation_pct: number
-  base_price: number
-  base_label: string
-  atr: number | null
-  atr_pct: number | null
-  dynamic_spread: boolean
-  grid_count: number
-  grid_spread_pct: number
-  step_pct: number
-  lower_bound: number
-  upper_bound: number
-  current_grid: number
-  total_grids: number
-  position_ratio: number
-  nearby_lower: number | null
-  nearby_upper: number | null
-  action_desc: string
-}
-
 export interface AutoTradeTask {
+  id?: number
   user_id?: number
   enabled: boolean
   symbol: string
@@ -417,6 +392,7 @@ export interface AutoTradeTask {
 }
 
 export interface TaskStatus {
+  id: number
   symbol: string
   running: boolean
   task: AutoTradeTask

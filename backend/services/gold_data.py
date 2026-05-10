@@ -2,7 +2,7 @@
 黄金 ETF 数据服务
 
 提供黄金 ETF 实时数据获取、技术指标计算、信号分析等业务逻辑。
-数据来源：新浪财经 K 线接口（主），腾讯财经（备）。
+数据来源：新浪财经 K 线接口（主），Tushare（备），腾讯财经（备）。
 支持 PostgreSQL (SQLAlchemy ORM) 数据缓存，减少重复请求。
 """
 
@@ -21,6 +21,8 @@ from backend.models.kline import KlineModel
 from backend.services.grid_trade import get_grid_signal
 
 logger = logging.getLogger(__name__)
+
+TUSHARE_TOKEN = "2876ea85cb005fb5fa17c809a98174f2d5aae8b1f830110a5ead6211"
 
 # 默认 ETF 代码：华夏黄金 ETF（518880）
 DEFAULT_SYMBOL = "sh518880"
@@ -124,7 +126,6 @@ def _fetch_from_sina(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
 
 def _fetch_from_tencent(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
     """从腾讯财经获取K线数据（备用）"""
-    # 腾讯接口: 6位数字代码
     code_num = symbol[2:] if symbol.startswith(('sh', 'sz')) else symbol
     market = 1 if symbol.startswith('sh') else 0
     url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={symbol},day,,,{datalen},qfq"
@@ -140,7 +141,6 @@ def _fetch_from_tencent(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
         qfqday = stock_data.get('qfqday', stock_data.get('day', []))
         if not qfqday:
             return None
-        # 取最新的datalen条
         qfqday = qfqday[-datalen:]
         df = pd.DataFrame(qfqday, columns=['日期', '开盘', '收盘', '最高', '最低', '成交量'])
         for col in ['开盘', '最高', '最低', '收盘']:
@@ -151,6 +151,59 @@ def _fetch_from_tencent(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
         logger.error(f"[_fetch_from_tencent] {symbol} error: {e}")
         traceback.print_exc()
         return None
+
+
+def _fetch_from_tushare(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
+    """从 Tushare 获取K线数据（备用）"""
+    try:
+        import tushare as ts
+        ts.set_token(TUSHARE_TOKEN)
+        pro = ts.pro_api()
+
+        ts_code = _symbol_to_ts_code(symbol)
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=datalen * 2)).strftime('%Y%m%d')
+
+        df_raw = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df_raw is None or df_raw.empty:
+            return None
+
+        df_raw = df_raw.sort_values('trade_date').reset_index(drop=True)
+        df_raw = df_raw.tail(datalen).reset_index(drop=True)
+
+        df = pd.DataFrame()
+        df['日期'] = df_raw['trade_date']
+        df['开盘'] = pd.to_numeric(df_raw['open'])
+        df['最高'] = pd.to_numeric(df_raw['high'])
+        df['最低'] = pd.to_numeric(df_raw['low'])
+        df['收盘'] = pd.to_numeric(df_raw['close'])
+        df['成交量'] = pd.to_numeric(df_raw['vol']) * 100
+
+        df = df.sort_values('日期').reset_index(drop=True)
+        logger.info(f"[_fetch_from_tushare] {symbol} 获取成功，共{len(df)}条")
+        return df
+    except ImportError:
+        logger.warning("[_fetch_from_tushare] tushare 未安装，跳过")
+        return None
+    except Exception as e:
+        logger.error(f"[_fetch_from_tushare] {symbol} error: {e}")
+        traceback.print_exc()
+        return None
+
+
+def _symbol_to_ts_code(symbol: str) -> str:
+    """将内部代码格式转换为 Tushare 代码格式
+
+    sh518880 -> 518880.SH
+    sz000300 -> 000300.SZ
+    518880   -> 518880.SH (默认沪市)
+    """
+    if symbol.startswith('sh'):
+        return symbol[2:] + '.SH'
+    elif symbol.startswith('sz'):
+        return symbol[2:] + '.SZ'
+    else:
+        return symbol + '.SH'
 
 
 def _parse_date_param(value: Optional[str]) -> Optional[date_type]:
@@ -284,7 +337,7 @@ def fetch_etf_kline(symbol: str = DEFAULT_SYMBOL, datalen: int = DEFAULT_DATALEN
 
 
 def _fetch_from_network(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
-    """从网络获取K线数据（新浪优先，腾讯备选）"""
+    """从网络获取K线数据（新浪优先，Tushare备选，腾讯兜底）"""
     last_error = None
     for attempt in range(3):
         df = _fetch_from_sina(symbol, datalen)
@@ -294,6 +347,12 @@ def _fetch_from_network(symbol: str, datalen: int) -> Optional[pd.DataFrame]:
         last_error = f"新浪财经第{attempt+1}次获取失败"
         logger.warning(f"[_fetch_from_network] {symbol} {last_error}")
         time.sleep(0.5)
+    df = _fetch_from_tushare(symbol, datalen)
+    if df is not None and len(df) > 0:
+        logger.info(f"[_fetch_from_network] {symbol} 从Tushare获取成功，共{len(df)}条")
+        return df
+    last_error = "Tushare获取失败"
+    logger.warning(f"[_fetch_from_network] {symbol} {last_error}")
     for attempt in range(3):
         df = _fetch_from_tencent(symbol, datalen)
         if df is not None and len(df) > 0:

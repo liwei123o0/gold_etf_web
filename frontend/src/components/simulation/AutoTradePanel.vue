@@ -1,11 +1,107 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useSimulationStore } from '@/stores/simulation'
 import { storeToRefs } from 'pinia'
-import { normalizeSymbol, formatSymbolForDisplay } from '@/utils/symbol'
+import { normalizeSymbol, formatSymbolForDisplay, stripPrefix } from '@/utils/symbol'
 
 const simStore = useSimulationStore()
 const { autoTradeTasks, taskCount, runningTaskCount, isAutoTrading, realtimePrices } = storeToRefs(simStore)
+
+const ORDER_STORAGE_KEY = 'autotask_card_order'
+
+function loadSavedOrder(): number[] {
+  try {
+    const raw = localStorage.getItem(ORDER_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function saveOrder(order: number[]) {
+  localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(order))
+}
+
+const draggedId = ref<number | null>(null)
+const dragOverId = ref<number | null>(null)
+
+const taskList = computed(() => {
+  const tasks = Object.values(autoTradeTasks.value)
+  const saved = loadSavedOrder()
+  const validIds = new Set(tasks.map(t => t.id))
+  const order = saved.filter(id => validIds.has(id))
+  tasks.forEach(t => {
+    if (!order.includes(t.id)) order.push(t.id)
+  })
+  return order.map(id => autoTradeTasks.value[id]).filter(Boolean)
+})
+
+watch(taskCount, (newCount) => {
+  if (newCount === 0) {
+    saveOrder([])
+  }
+})
+
+function onDragStart(e: DragEvent, taskId: number) {
+  draggedId.value = taskId
+  e.dataTransfer!.effectAllowed = 'move'
+  e.dataTransfer!.setData('text/plain', String(taskId))
+  nextTick(() => {
+    const el = (e.target as HTMLElement)?.closest('.task-card')
+    if (el) el.classList.add('dragging')
+  })
+}
+
+function onDragEnd(e: DragEvent) {
+  draggedId.value = null
+  dragOverId.value = null
+  const el = (e.target as HTMLElement)?.closest('.task-card')
+  if (el) el.classList.remove('dragging')
+}
+
+function onDragOver(e: DragEvent, taskId: number) {
+  e.preventDefault()
+  e.dataTransfer!.dropEffect = 'move'
+  if (draggedId.value !== null && draggedId.value !== taskId) {
+    dragOverId.value = taskId
+  }
+}
+
+function onDragLeave() {
+  dragOverId.value = null
+}
+
+function onDrop(e: DragEvent, targetId: number) {
+  e.preventDefault()
+  dragOverId.value = null
+  if (draggedId.value === null || draggedId.value === targetId) return
+  const current = taskList.value.map(t => t.id)
+  const fromIdx = current.indexOf(draggedId.value)
+  const toIdx = current.indexOf(targetId)
+  if (fromIdx === -1 || toIdx === -1) return
+  const newOrder = [...current]
+  newOrder.splice(fromIdx, 1)
+  newOrder.splice(toIdx, 0, draggedId.value)
+  saveOrder(newOrder)
+}
+
+function onContainerDrop(e: DragEvent) {
+  if (!draggedId.value) return
+  e.preventDefault()
+  const cards = taskList.value
+  let targetId = cards[cards.length - 1]?.id
+  for (let i = 0; i < cards.length; i++) {
+    const el = document.querySelector(`[data-task-id="${cards[i].id}"]`) as HTMLElement | null
+    if (el) {
+      const elRect = el.getBoundingClientRect()
+      if (e.clientY < elRect.top + elRect.height / 2) {
+        targetId = cards[i].id
+        break
+      }
+    }
+  }
+  onDrop(e, targetId!)
+}
 
 // Add task form
 const showAddForm = ref(false)
@@ -22,11 +118,13 @@ const addForm = ref({
   take_profit_pct: 10.0,
   trend_ma_key: '',
   dynamic_interval: false,
+  position_shares: 0,
+  position_avg_cost: 0,
 })
 const addError = ref<string | null>(null)
 
 // Edit task form
-const editingSymbol = ref<string | null>(null)
+const editingTaskId = ref<number | null>(null)
 const editForm = ref({
   strategy: 'grid',
   grid_count: 10,
@@ -39,6 +137,8 @@ const editForm = ref({
   take_profit_pct: 10.0,
   trend_ma_key: '',
   dynamic_interval: false,
+  position_shares: 0,
+  position_avg_cost: 0,
 })
 
 const gridCountOptions = [5, 10, 15, 20]
@@ -71,6 +171,7 @@ function openAddForm() {
     symbol: '', strategy: 'grid', grid_count: 10, base_ma_key: 'MA20',
     grid_spread: 0.10, position_size: 1.0, check_interval: 30, allocated_funds: 30000,
     stop_loss_pct: -5.0, take_profit_pct: 10.0, trend_ma_key: '', dynamic_interval: false,
+    position_shares: 0, position_avg_cost: 0,
   }
   addError.value = null
   showAddForm.value = true
@@ -94,10 +195,10 @@ async function handleAddTask() {
   }
 }
 
-function openEditForm(symbol: string) {
-  const task = autoTradeTasks.value[symbol]
+function openEditForm(taskId: number) {
+  const task = autoTradeTasks.value[taskId]
   if (!task) return
-  editingSymbol.value = symbol
+  editingTaskId.value = taskId
   editForm.value = {
     strategy: task.task.strategy ?? 'grid',
     grid_count: task.task.grid_count ?? 10,
@@ -110,34 +211,36 @@ function openEditForm(symbol: string) {
     take_profit_pct: task.task.take_profit_pct ?? 10.0,
     trend_ma_key: task.task.trend_ma_key ?? '',
     dynamic_interval: task.task.dynamic_interval ?? false,
+    position_shares: task.task_position?.shares ?? 0,
+    position_avg_cost: task.task_position?.avg_cost ?? 0,
   }
 }
 
 async function handleSaveEdit() {
-  if (!editingSymbol.value) return
+  if (!editingTaskId.value) return
   const payload = { ...editForm.value }
   if (!payload.trend_ma_key) payload.trend_ma_key = undefined as any
-  await simStore.updateAutoTradeTask(editingSymbol.value, payload)
-  editingSymbol.value = null
+  await simStore.updateAutoTradeTask(editingTaskId.value, payload)
+  editingTaskId.value = null
   await simStore.fetchAutoTradeTasks()
 }
 
-async function handleDeleteTask(symbol: string) {
-  const task = autoTradeTasks.value[symbol]
+async function handleDeleteTask(taskId: number) {
+  const task = autoTradeTasks.value[taskId]
   if (task?.running) {
-    await simStore.stopAutoTradeTask(symbol)
+    await simStore.stopAutoTradeTask(taskId)
   }
-  await simStore.deleteAutoTradeTask(symbol)
+  await simStore.deleteAutoTradeTask(taskId)
   await simStore.fetchAutoTradeTasks()
 }
 
-async function handleStartTask(symbol: string) {
-  await simStore.startAutoTradeTask(symbol)
+async function handleStartTask(taskId: number) {
+  await simStore.startAutoTradeTask(taskId)
   await simStore.fetchAutoTradeTasks()
 }
 
-async function handleStopTask(symbol: string) {
-  await simStore.stopAutoTradeTask(symbol)
+async function handleStopTask(taskId: number) {
+  await simStore.stopAutoTradeTask(taskId)
   await simStore.fetchAutoTradeTasks()
 }
 
@@ -150,8 +253,6 @@ async function handleStopAll() {
   await simStore.stopAllAutoTradeTasks()
   await simStore.fetchAutoTradeTasks()
 }
-
-const taskList = computed(() => Object.values(autoTradeTasks.value))
 
 function getRealtimePrice(symbol: string) {
   const rt = realtimePrices.value[symbol] || realtimePrices.value[stripPrefix(symbol)]
@@ -278,6 +379,16 @@ function strategyLabel(s: string) {
             <span class="toggle-text">{{ addForm.dynamic_interval ? '开启' : '关闭' }}</span>
           </label>
         </div>
+        <div class="form-item">
+          <label>已持有数量</label>
+          <input v-model.number="addForm.position_shares" type="number" min="0" step="100" class="input" placeholder="0" />
+          <span class="unit">股（选填）</span>
+        </div>
+        <div class="form-item">
+          <label>持仓成本价</label>
+          <input v-model.number="addForm.position_avg_cost" type="number" min="0" step="0.001" class="input" placeholder="0.000" />
+          <span class="unit">元/股（选填）</span>
+        </div>
       </div>
       <div v-if="addError" class="error-msg">{{ addError }}</div>
       <div class="form-btns">
@@ -287,8 +398,8 @@ function strategyLabel(s: string) {
     </div>
 
     <!-- Edit Task Form -->
-    <div v-if="editingSymbol" class="add-form">
-      <h4 class="form-title">编辑任务 · {{ editingSymbol }}</h4>
+    <div v-if="editingTaskId" class="add-form">
+      <h4 class="form-title">编辑任务 · {{ autoTradeTasks[editingTaskId]?.symbol }}</h4>
       <div class="form-grid">
         <div class="form-item">
           <label>策略类型</label>
@@ -360,9 +471,19 @@ function strategyLabel(s: string) {
             <span class="toggle-text">{{ editForm.dynamic_interval ? '开启' : '关闭' }}</span>
           </label>
         </div>
+        <div class="form-item">
+          <label>已持有数量</label>
+          <input v-model.number="editForm.position_shares" type="number" min="0" step="100" class="input" placeholder="0" />
+          <span class="unit">股</span>
+        </div>
+        <div class="form-item">
+          <label>持仓成本价</label>
+          <input v-model.number="editForm.position_avg_cost" type="number" min="0" step="0.001" class="input" placeholder="0.000" />
+          <span class="unit">元/股</span>
+        </div>
       </div>
       <div class="form-btns">
-        <button class="btn-sm cancel-btn" @click="editingSymbol = null">取消</button>
+        <button class="btn-sm cancel-btn" @click="editingTaskId = null">取消</button>
         <button class="btn-sm confirm-btn" :disabled="isAutoTrading" @click="handleSaveEdit">保存</button>
       </div>
     </div>
@@ -372,10 +493,19 @@ function strategyLabel(s: string) {
       暂无自动交易任务，点击"添加任务"创建一个
     </div>
 
-    <div v-else class="task-cards">
-      <div v-for="ts in taskList" :key="ts.symbol" class="task-card">
+    <div v-else class="task-cards"
+      @dragover.prevent
+      @drop="onContainerDrop">
+      <div v-for="ts in taskList" :key="ts.id" :data-task-id="ts.id"
+        class="task-card" :class="{ 'drag-over': dragOverId === ts.id, 'dragging': draggedId === ts.id }"
+        draggable="true"
+        @dragstart="onDragStart($event, ts.id)"
+        @dragend="onDragEnd($event)"
+        @dragover="onDragOver($event, ts.id)"
+        @dragleave="onDragLeave">
         <div class="task-card-header">
           <div class="task-symbol-row">
+            <span class="drag-handle" title="拖拽排序">⋮⋮</span>
             <span class="running-indicator" :class="{ running: ts.running }"></span>
             <div class="task-symbol-info">
               <span class="task-name">{{ getRealtimeName(ts.symbol) || ts.task_name || '' }}</span>
@@ -467,12 +597,12 @@ function strategyLabel(s: string) {
 
         <div class="task-card-actions">
           <template v-if="!ts.running">
-            <button class="btn-sm edit-btn" :disabled="isAutoTrading" @click="openEditForm(ts.symbol)">编辑</button>
-            <button class="btn-sm start-btn" :disabled="isAutoTrading" @click="handleStartTask(ts.symbol)">启动</button>
-            <button class="btn-sm delete-btn" :disabled="isAutoTrading" @click="handleDeleteTask(ts.symbol)">删除</button>
+            <button class="btn-sm edit-btn" :disabled="isAutoTrading" @click="openEditForm(ts.id)">编辑</button>
+            <button class="btn-sm start-btn" :disabled="isAutoTrading" @click="handleStartTask(ts.id)">启动</button>
+            <button class="btn-sm delete-btn" :disabled="isAutoTrading" @click="handleDeleteTask(ts.id)">删除</button>
           </template>
           <template v-else>
-            <button class="btn-sm stop-btn" :disabled="isAutoTrading" @click="handleStopTask(ts.symbol)">停止</button>
+            <button class="btn-sm stop-btn" :disabled="isAutoTrading" @click="handleStopTask(ts.id)">停止</button>
           </template>
         </div>
       </div>
@@ -656,6 +786,23 @@ function strategyLabel(s: string) {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  cursor: grab;
+  transition: opacity 0.2s, transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+
+  &:active { cursor: grabbing; }
+
+  &.dragging {
+    opacity: 0.4;
+    transform: scale(0.97);
+    box-shadow: none;
+    z-index: 1;
+  }
+
+  &.drag-over {
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 0 2px rgba(0, 242, 255, 0.25), 0 4px 16px rgba(0, 242, 255, 0.1);
+    transform: translateY(-2px);
+  }
 }
 
 .task-card-header {
@@ -669,6 +816,19 @@ function strategyLabel(s: string) {
   align-items: center;
   gap: 6px;
   flex: 1;
+}
+
+.drag-handle {
+  color: rgba(255,255,255,0.2);
+  font-size: 14px;
+  letter-spacing: -2px;
+  cursor: grab;
+  flex-shrink: 0;
+  user-select: none;
+  line-height: 1;
+
+  &:hover { color: rgba(255,255,255,0.45); }
+  &:active { cursor: grabbing; color: var(--accent-cyan); }
 }
 
 .task-symbol-info {

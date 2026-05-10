@@ -21,6 +21,12 @@ class AutoTradeService:
 
     @classmethod
     async def add_task(cls, user_id: int, symbol: str, config: dict) -> Dict[str, Any]:
+        position_shares = config.get("position_shares", 0) or 0
+        position_avg_cost = config.get("position_avg_cost", 0) or 0
+        allocated_funds = config.get("allocated_funds", 0) or 0
+        position_value = position_shares * position_avg_cost if position_shares > 0 and position_avg_cost > 0 else 0
+        task_cash = allocated_funds - position_value
+
         cfg = {
             "strategy": config.get("strategy", "grid"),
             "grid_count": config.get("grid_count", 10),
@@ -29,14 +35,14 @@ class AutoTradeService:
             "macd_ma_key": config.get("macd_ma_key"),
             "position_size": config.get("position_size", 1.0),
             "check_interval": config.get("check_interval", 30),
-            "allocated_funds": config.get("allocated_funds", 0),
+            "allocated_funds": allocated_funds,
             "enabled": False,
             "last_check": None,
             "last_signal": None,
-            "task_cash": config.get("allocated_funds", 0),
+            "task_cash": task_cash,
             "task_pnl": 0,
-            "position_shares": 0,
-            "position_avg_cost": 0,
+            "position_shares": position_shares,
+            "position_avg_cost": position_avg_cost,
             "unrealized_pnl": 0,
             "task_name": config.get("task_name", symbol),
             "stop_loss_pct": config.get("stop_loss_pct", -5.0),
@@ -51,10 +57,13 @@ class AutoTradeService:
         return {"success": True, "task": task}
 
     @classmethod
-    async def start_task(cls, user_id: int, symbol: str) -> Dict[str, Any]:
-        task_config = AutoTradeTask.find_by_symbol(user_id, symbol)
+    async def start_task(cls, task_id: int) -> Dict[str, Any]:
+        task_config = AutoTradeTask.find_by_id(task_id)
         if not task_config:
-            return {"success": False, "error": f"任务 {symbol} 不存在"}
+            return {"success": False, "error": f"任务 {task_id} 不存在"}
+
+        user_id = task_config["user_id"]
+        symbol = task_config["symbol"]
 
         if task_config.get("enabled", False) and AutoTradeScheduler.is_running():
             return {"success": False, "error": f"{symbol} 自动交易已在运行"}
@@ -76,7 +85,7 @@ class AutoTradeService:
                 task_name=task_config.get("task_name", symbol),
             )
 
-        AutoTradeTask.update_enabled(user_id, symbol, True)
+        AutoTradeTask.update_enabled(task_id, True)
 
         if not AutoTradeScheduler.is_running():
             await AutoTradeScheduler.start()
@@ -84,12 +93,13 @@ class AutoTradeService:
         return {"success": True, "message": f"{symbol} 自动交易已启动", "task": task_config}
 
     @classmethod
-    async def stop_task(cls, user_id: int, symbol: str) -> Dict[str, Any]:
-        task_config = AutoTradeTask.find_by_symbol(user_id, symbol)
+    async def stop_task(cls, task_id: int) -> Dict[str, Any]:
+        task_config = AutoTradeTask.find_by_id(task_id)
         if not task_config:
-            return {"success": False, "error": f"任务 {symbol} 不存在"}
+            return {"success": False, "error": f"任务 {task_id} 不存在"}
 
-        AutoTradeTask.update_enabled(user_id, symbol, False)
+        AutoTradeTask.update_enabled(task_id, False)
+        symbol = task_config.get("symbol", "")
         return {"success": True, "message": f"{symbol} 自动交易已停止"}
 
     @classmethod
@@ -98,7 +108,7 @@ class AutoTradeService:
         started = []
         for t in tasks:
             if not t.get("enabled", False):
-                result = await cls.start_task(user_id, t["symbol"])
+                result = await cls.start_task(t["id"])
                 if result.get("success"):
                     started.append(t["symbol"])
         return {"success": True, "started": started}
@@ -109,27 +119,28 @@ class AutoTradeService:
         stopped = []
         for t in tasks:
             if t.get("enabled", False):
-                AutoTradeTask.update_enabled(user_id, t["symbol"], False)
+                AutoTradeTask.update_enabled(t["id"], False)
                 stopped.append(t["symbol"])
         return {"success": True, "stopped": stopped}
 
     @classmethod
-    async def delete_task(cls, user_id: int, symbol: str) -> Dict[str, Any]:
-        task = AutoTradeTask.find_by_symbol(user_id, symbol)
+    async def delete_task(cls, task_id: int) -> Dict[str, Any]:
+        task = AutoTradeTask.find_by_id(task_id)
         if task and task.get("enabled", False):
-            AutoTradeTask.update_enabled(user_id, symbol, False)
-        AutoTradeTask.delete_task(user_id, symbol)
+            AutoTradeTask.update_enabled(task_id, False)
+        AutoTradeTask.delete_task(task_id)
+        symbol = task.get("symbol", "") if task else ""
         return {"success": True, "message": f"{symbol} 任务已删除"}
 
     @classmethod
-    def update_task_config(cls, user_id: int, symbol: str, config: dict) -> Dict[str, Any]:
-        existing = AutoTradeTask.find_by_symbol(user_id, symbol)
+    def update_task_config(cls, task_id: int, config: dict) -> Dict[str, Any]:
+        existing = AutoTradeTask.find_by_id(task_id)
         if not existing:
-            return {"success": False, "error": f"任务 {symbol} 不存在"}
+            return {"success": False, "error": f"任务 {task_id} 不存在"}
 
         updated = {**existing, **config}
-        AutoTradeTask.upsert(user_id, symbol, updated)
-        task = AutoTradeTask.find_by_symbol(user_id, symbol)
+        AutoTradeTask.upsert(existing["user_id"], existing["symbol"], updated)
+        task = AutoTradeTask.find_by_id(task_id)
         return {"success": True, "task": task}
 
     @classmethod

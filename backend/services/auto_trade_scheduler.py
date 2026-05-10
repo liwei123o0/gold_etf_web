@@ -6,7 +6,7 @@
 """
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from typing import Dict, Any, Optional
 from backend.models.auto_trade import AutoTradeTask
@@ -31,7 +31,9 @@ class AutoTradeScheduler:
 
     @classmethod
     def is_running(cls) -> bool:
-        return cls._running and cls._task is not None and not cls._task.done()
+        result = cls._running and cls._task is not None and not cls._task.done()
+        logger.debug(f"[Scheduler] is_running() = {result}, _running={cls._running}, _task={cls._task}, done={cls._task.done() if cls._task else 'N/A'}")
+        return result
 
     @classmethod
     async def start(cls, check_interval: int = None):
@@ -44,7 +46,8 @@ class AutoTradeScheduler:
 
         cls._running = True
         cls._task = asyncio.create_task(cls._run_loop())
-        logger.info(f"AutoTradeScheduler 已启动，检查间隔: {cls._check_interval}s")
+        logger.info(f"[Scheduler] AutoTradeScheduler 已启动，检查间隔: {cls._check_interval}s")
+        logger.info(f"[Scheduler] 内部状态: _running={cls._running}, _task={cls._task}, done={cls._task.done() if cls._task else 'N/A'}")
 
     @classmethod
     async def stop(cls):
@@ -60,15 +63,32 @@ class AutoTradeScheduler:
 
     @classmethod
     async def _run_loop(cls):
+        from backend.utils.timezone import get_china_now
+        
+        logger.info(f"[Scheduler] _run_loop 启动，_running={cls._running}")
+        
         while cls._running:
+            now = get_china_now()
+            logger.info(f"[Scheduler] ========== 开始检查任务 - {now.strftime('%Y-%m-%d %H:%M:%S')} ==========")
+            
             try:
                 await cls._check_all_tasks()
+                logger.info(f"[Scheduler] _check_all_tasks 完成")
             except asyncio.CancelledError:
+                logger.warning(f"[Scheduler] _check_all_tasks 被取消")
                 raise
             except Exception as e:
-                logger.error(f"AutoTradeScheduler 循环异常: {e}")
-
+                logger.error(f"[Scheduler] _check_all_tasks 异常: {e}")
+            
+            next_time = get_china_now()
+            next_time = next_time.replace(microsecond=0) + timedelta(seconds=cls._next_interval)
+            logger.info(f"[Scheduler] 本次检查完成，下次检查时间: {next_time.strftime('%Y-%m-%d %H:%M:%S')} (间隔 {cls._next_interval}s)")
+            
+            logger.info(f"[Scheduler] 准备 sleep {cls._next_interval} 秒，当前 _running={cls._running}")
             await asyncio.sleep(cls._next_interval)
+            logger.info(f"[Scheduler] sleep 完成，即将进入下一轮，当前 _running={cls._running}")
+        
+        logger.info(f"[Scheduler] _run_loop 退出循环，_running={cls._running}")
 
     @classmethod
     def _calc_dynamic_interval(cls, task_cfg: dict, atr_pct: float) -> int:
@@ -93,34 +113,41 @@ class AutoTradeScheduler:
 
     @classmethod
     async def _check_all_tasks(cls):
-        if not cls._is_trading_time():
-            cls._next_interval = cls._check_interval
-            return
+        is_trading_time = cls._is_trading_time()
+        logger.info(f"[Scheduler] _check_all_tasks 开始: is_trading_time={is_trading_time}")
 
         try:
             all_tasks = AutoTradeTask.find_all_enabled()
+            logger.info(f"[Scheduler] 找到 {len(all_tasks)} 个启用任务")
         except Exception as e:
             logger.error(f"查询已启用任务失败: {e}")
+            cls._next_interval = cls._check_interval
             return
 
         if not all_tasks:
+            logger.info(f"[Scheduler] 没有已启用任务")
             cls._next_interval = cls._check_interval
             return
 
         has_dynamic = any(t.get("dynamic_interval", False) for t in all_tasks)
         min_interval = cls._check_interval
+        logger.info(f"[Scheduler] has_dynamic={has_dynamic}, min_interval={min_interval}")
 
         for task_cfg in all_tasks:
             try:
-                await cls._check_and_trade(task_cfg)
-                if has_dynamic:
-                    df = gold_data.get_full_data(task_cfg["symbol"], datalen=30)
-                    if df is not None and len(df) >= 5:
-                        atr = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 0
-                        close = float(df["收盘"].iloc[-1])
-                        atr_pct = atr / close * 100 if close > 0 else -1
-                        task_interval = cls._calc_dynamic_interval(task_cfg, atr_pct)
-                        min_interval = min(min_interval, task_interval)
+                if is_trading_time:
+                    await cls._check_and_trade(task_cfg)
+                    if has_dynamic:
+                        df = gold_data.get_full_data(task_cfg["symbol"], datalen=30)
+                        if df is not None and len(df) >= 5:
+                            atr = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 0
+                            close = float(df["收盘"].iloc[-1])
+                            atr_pct = atr / close * 100 if close > 0 else -1
+                            task_interval = cls._calc_dynamic_interval(task_cfg, atr_pct)
+                            min_interval = min(min_interval, task_interval)
+                            logger.info(f"[Scheduler] 动态间隔计算: atr={atr}, atr_pct={atr_pct}, task_interval={task_interval}")
+                else:
+                    await cls._update_check_time(task_cfg)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -128,7 +155,52 @@ class AutoTradeScheduler:
                 symbol = task_cfg.get("symbol", "?")
                 logger.error(f"[AutoTradeScheduler] {user_id}/{symbol} 检查异常: {e}")
 
+        logger.info(f"[Scheduler] _check_all_tasks 结束: 设置 _next_interval={min_interval if has_dynamic else cls._check_interval}")
         cls._next_interval = min_interval if has_dynamic else cls._check_interval
+
+    @classmethod
+    async def _update_check_time(cls, task_cfg: dict) -> None:
+        user_id = task_cfg["user_id"]
+        symbol = task_cfg["symbol"]
+        strategy = task_cfg.get("strategy", "grid")
+        try:
+            df = gold_data.get_full_data(symbol, datalen=90)
+            if df is not None and len(df) >= 20:
+                latest = df.iloc[-1]
+                close = float(latest["收盘"])
+                if strategy == "ma_trend":
+                    signal = grid_trade.get_ma_trend_signal(
+                        latest,
+                        fast_ma_key=task_cfg.get("base_ma_key", "MA5"),
+                        slow_ma_key=task_cfg.get("trend_ma_key") or "MA20",
+                        position_size=task_cfg.get("position_size", 1.0),
+                    )
+                else:
+                    grid_count = task_cfg.get("grid_count", 10)
+                    grid_spread = task_cfg.get("grid_spread", 0.10)
+                    base_ma_key = task_cfg.get("base_ma_key", "MA20")
+                    macd_ma_key = task_cfg.get("macd_ma_key")
+                    macd_hist_mean = None
+                    if macd_ma_key and "MACD_HIST" in df.columns:
+                        window = 20
+                        macd_hist_mean = df["MACD_HIST"].iloc[-window:].mean() if len(df) >= window else df["MACD_HIST"].mean()
+                    signal = grid_trade.get_grid_signal(
+                        latest,
+                        grid_count=grid_count,
+                        grid_spread=grid_spread,
+                        ma_key=base_ma_key,
+                        macd_ma_key=macd_ma_key,
+                        macd_hist_mean=macd_hist_mean,
+                    )
+                signal_str = signal.get("signal", "观望")
+                logger.debug(f"[OffHours] {user_id}/{symbol} 非交易时间，信号={signal_str}")
+            else:
+                signal_str = "观望"
+                logger.debug(f"[OffHours] {user_id}/{symbol} 数据不足，信号=观望")
+        except Exception as e:
+            signal_str = "观望"
+            logger.debug(f"[OffHours] {user_id}/{symbol} 计算信号异常: {e}")
+        AutoTradeTask.update_last_check(user_id, symbol, signal_str)
 
     @classmethod
     def _is_trading_time(cls) -> bool:
@@ -175,7 +247,7 @@ class AutoTradeScheduler:
             account_cash = float(portfolio["account"].get("cash", 0))
             if account_cash <= 0 and task_cash > 0:
                 logger.warning(f"[Sync] {user_id}/{symbol} 模拟账户已无现金，暂停任务")
-                AutoTradeTask.update_enabled(user_id, symbol, False)
+                AutoTradeTask.update_enabled(task_cfg["id"], False)
                 return
 
         # ========== 2. 止损 / 止盈 检查（不受冷却期限制）==========
@@ -412,14 +484,36 @@ class AutoTradeScheduler:
     @classmethod
     def get_status(cls, user_id: int, symbol: str = None):
         """获取任务运行状态（供 API 查询用）"""
+        scheduler_running = cls.is_running()
+        logger.info(f"[Scheduler] get_status called: user_id={user_id}, symbol={symbol}, scheduler_running={scheduler_running}")
+        
+        def _calc_unrealized(task_cfg: dict) -> float:
+            """基于实时价格计算浮动盈亏"""
+            shares = task_cfg.get("position_shares", 0) or 0
+            avg_cost = task_cfg.get("position_avg_cost", 0) or 0
+            if shares <= 0 or avg_cost <= 0:
+                return task_cfg.get("unrealized_pnl", 0) or 0
+            try:
+                df = gold_data.get_full_data(task_cfg["symbol"], datalen=5)
+                if df is not None and len(df) > 0:
+                    close = float(df["收盘"].iloc[-1])
+                    return (close - avg_cost) * shares
+            except Exception as e:
+                logger.warning(f"[Scheduler] 计算实时浮动盈亏失败: {e}")
+            return task_cfg.get("unrealized_pnl", 0) or 0
+
         if symbol:
             task_cfg = AutoTradeTask.find_by_symbol(user_id, symbol)
             if not task_cfg:
                 return None
+            task_enabled = task_cfg.get("enabled", False)
+            running = scheduler_running and task_enabled
+            logger.info(f"[Scheduler] task status: symbol={symbol}, enabled={task_enabled}, running={running}")
             signal = cls._calc_task_signal(task_cfg)
             return {
+                "id": task_cfg["id"],
                 "symbol": task_cfg["symbol"],
-                "running": cls.is_running() and task_cfg.get("enabled", False),
+                "running": running,
                 "task": task_cfg,
                 "signal": signal,
                 "task_cash": task_cfg.get("task_cash", task_cfg.get("allocated_funds", 0)),
@@ -429,7 +523,7 @@ class AutoTradeScheduler:
                     "avg_cost": task_cfg.get("position_avg_cost", 0),
                 },
                 "task_name": task_cfg.get("task_name", symbol),
-                "unrealized_pnl": task_cfg.get("unrealized_pnl", 0),
+                "unrealized_pnl": _calc_unrealized(task_cfg),
                 "trade_count_today": task_cfg.get("trade_count_today", 0),
                 "last_trade_time": task_cfg.get("last_trade_time"),
                 "last_trade_direction": task_cfg.get("last_trade_direction"),
@@ -440,10 +534,14 @@ class AutoTradeScheduler:
         tasks = AutoTradeTask.find_by_user(user_id)
         result = []
         for t in tasks:
+            task_enabled = t.get("enabled", False)
+            running = scheduler_running and task_enabled
+            logger.info(f"[Scheduler] task status: symbol={t['symbol']}, enabled={task_enabled}, running={running}")
             signal = cls._calc_task_signal(t)
             result.append({
+                "id": t["id"],
                 "symbol": t["symbol"],
-                "running": cls.is_running() and t.get("enabled", False),
+                "running": running,
                 "task": t,
                 "signal": signal,
                 "task_cash": t.get("task_cash", t.get("allocated_funds", 0)),
@@ -453,7 +551,7 @@ class AutoTradeScheduler:
                     "avg_cost": t.get("position_avg_cost", 0),
                 },
                 "task_name": t.get("task_name", t.get("symbol", "")),
-                "unrealized_pnl": t.get("unrealized_pnl", 0),
+                "unrealized_pnl": _calc_unrealized(t),
                 "trade_count_today": t.get("trade_count_today", 0),
                 "last_trade_time": t.get("last_trade_time"),
                 "last_trade_direction": t.get("last_trade_direction"),

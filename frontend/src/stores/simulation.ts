@@ -11,7 +11,7 @@ export const useSimulationStore = defineStore('simulation', () => {
   const isLoading = ref(false)
   const error = ref<string | null>(null)
   const realtimePrices = ref<Record<string, { price: number; name: string }>>({})
-  const autoTradeTasks = ref<Record<string, TaskStatus>>({})
+  const autoTradeTasks = ref<Record<number, TaskStatus>>({})
   const isAutoTrading = ref(false)
   const autoTradeError = ref<string | null>(null)
   const currentSymbol = ref<string>('sh518880')
@@ -159,9 +159,9 @@ export const useSimulationStore = defineStore('simulation', () => {
     if (!authStore.user) return
     try {
       const tasks = await stockService.getAutoTradeTasks()
-      const map: Record<string, TaskStatus> = {}
+      const map: Record<number, TaskStatus> = {}
       for (const t of tasks) {
-        map[t.symbol] = t
+        map[t.id] = t
       }
       autoTradeTasks.value = map
     } catch (e: any) {
@@ -175,7 +175,9 @@ export const useSimulationStore = defineStore('simulation', () => {
     autoTradeError.value = null
     try {
       const result = await stockService.addAutoTradeTask({ symbol, ...config })
-      autoTradeTasks.value[symbol] = result
+      if (result.task?.id) {
+        autoTradeTasks.value[result.task.id] = result
+      }
       return { success: true }
     } catch (e: any) {
       autoTradeError.value = e.message
@@ -185,13 +187,13 @@ export const useSimulationStore = defineStore('simulation', () => {
     }
   }
 
-  async function deleteAutoTradeTask(symbol: string) {
+  async function deleteAutoTradeTask(taskId: number) {
     if (!authStore.user) return
     isAutoTrading.value = true
     autoTradeError.value = null
     try {
-      await stockService.deleteAutoTradeTask(symbol)
-      delete autoTradeTasks.value[symbol]
+      await stockService.deleteAutoTradeTask(taskId)
+      delete autoTradeTasks.value[taskId]
     } catch (e: any) {
       autoTradeError.value = e.message
     } finally {
@@ -199,11 +201,11 @@ export const useSimulationStore = defineStore('simulation', () => {
     }
   }
 
-  async function updateAutoTradeTask(symbol: string, config: Partial<AutoTradeTask>) {
+  async function updateAutoTradeTask(taskId: number, config: Partial<AutoTradeTask>) {
     if (!authStore.user) return
     try {
-      const result = await stockService.updateAutoTradeTask(symbol, config)
-      autoTradeTasks.value[symbol] = result
+      const result = await stockService.updateAutoTradeTask(taskId, config)
+      autoTradeTasks.value[taskId] = result
       return { success: true }
     } catch (e: any) {
       autoTradeError.value = e.message
@@ -211,12 +213,12 @@ export const useSimulationStore = defineStore('simulation', () => {
     }
   }
 
-  async function startAutoTradeTask(symbol: string) {
+  async function startAutoTradeTask(taskId: number) {
     if (!authStore.user) return
     isAutoTrading.value = true
     autoTradeError.value = null
     try {
-      await stockService.startAutoTradeTask(symbol)
+      await stockService.startAutoTradeTask(taskId)
       await fetchAutoTradeTasks()
     } catch (e: any) {
       autoTradeError.value = e.message
@@ -225,12 +227,12 @@ export const useSimulationStore = defineStore('simulation', () => {
     }
   }
 
-  async function stopAutoTradeTask(symbol: string) {
+  async function stopAutoTradeTask(taskId: number) {
     if (!authStore.user) return
     isAutoTrading.value = true
     autoTradeError.value = null
     try {
-      await stockService.stopAutoTradeTask(symbol)
+      await stockService.stopAutoTradeTask(taskId)
       await fetchAutoTradeTasks()
     } catch (e: any) {
       autoTradeError.value = e.message

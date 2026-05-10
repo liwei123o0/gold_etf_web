@@ -25,7 +25,7 @@ const intervalOptions = [
   { label: '5分钟', value: 300000 },
 ]
 
-function onIntervalChange(key: 'realtimeInterval' | 'simRealtimeInterval' | 'autoTradeInterval', event: Event) {
+function onIntervalChange(key: 'realtimeInterval' | 'simRealtimeInterval', event: Event) {
   const target = event.target as HTMLSelectElement
   updateSetting(key, Number(target.value))
   intervalMsg.value = 'success'
@@ -196,19 +196,6 @@ function formatRate(rate: number | undefined, defaultRate: number): string {
                 <option v-for="opt in intervalOptions.filter(o => o.value <= 30000)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
               <span class="unit">模拟交易行情刷新间隔</span>
-            </div>
-          </div>
-          <div class="form-item">
-            <label>自动交易</label>
-            <div class="input-group">
-              <select
-                :value="globalSettings.autoTradeInterval"
-                class="input select"
-                @change="onIntervalChange('autoTradeInterval', $event)"
-              >
-                <option v-for="opt in intervalOptions.filter(o => o.value >= 10000)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-              </select>
-              <span class="unit">自动交易检查间隔</span>
             </div>
           </div>
         </div>

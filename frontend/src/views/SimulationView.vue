@@ -16,7 +16,6 @@ const { orders, portfolio } = storeToRefs(simStore)
 const { settings: globalSettings } = useGlobalSettings()
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let autoTradePollTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(async () => {
   await simStore.loadPortfolio()
@@ -32,7 +31,6 @@ onMounted(async () => {
     if (currentSymbol && !symbols.includes(currentSymbol)) {
       symbols.push(currentSymbol)
     }
-    // Poll symbols from all auto-trade tasks (running or not) for real-time price display
     for (const ts of Object.values(simStore.autoTradeTasks)) {
       const sym = stripPrefix(ts.symbol)
       if (!symbols.includes(sym)) {
@@ -46,14 +44,10 @@ onMounted(async () => {
 
   pollRealtime()
   pollTimer = setInterval(pollRealtime, globalSettings.value.simRealtimeInterval)
-  autoTradePollTimer = setInterval(() => {
-    simStore.fetchAutoTradeTasks()
-  }, globalSettings.value.autoTradeInterval)
 })
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
-  if (autoTradePollTimer) clearInterval(autoTradePollTimer)
 })
 </script>
 
