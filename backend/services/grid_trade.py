@@ -268,12 +268,8 @@ def get_grid_signal(latest: pd.Series,
             hist_mean_abs = 0.0
 
         # 基准价
-        if macd_val > 0:
-            base_price = macd_val
-            base_label = f"{macd_ma_key}={macd_val:.6f}"
-        else:
-            base_price = close
-            base_label = f"收盘价={close:.4f}（{macd_ma_key}无数据）"
+        base_price = close
+        base_label = f"收盘价={close:.4f}"
 
         # ATR 动态区间（MACD模式也用ATR做基础spread）
         atr = float(latest.get('ATR', 0))
@@ -319,7 +315,7 @@ def get_grid_signal(latest: pd.Series,
             action_desc = f"MACD{macd_ma_key.replace('MACD_','')}低位，趋势弱，可买入"
         elif current_index >= grid_count - 2:
             action = "卖出"
-            action_desc = f"MACD{macd_ma_key.replace('MACd_','')}高位，趋势强，逢高减仓"
+            action_desc = f"MACD{macd_ma_key.replace('MACD_','')}高位，趋势强，逢高减仓"
         elif position_ratio >= 0.75:
             action = "持有"
             action_desc = f"HIST均值偏正，趋势偏多，继续持有"

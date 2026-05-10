@@ -28,6 +28,8 @@ class AutoTradeScheduler:
     _running: bool = False
     _check_interval: int = DEFAULT_CHECK_INTERVAL
     _next_interval: int = DEFAULT_CHECK_INTERVAL
+    _data_cache: Dict[str, Any] = {}
+    _data_cache_ts: float = 0
 
     @classmethod
     def is_running(cls) -> bool:
@@ -109,7 +111,7 @@ class AutoTradeScheduler:
         else:
             base = min(config_interval * 2, 90)
 
-        return max(10, min(base, config_interval))
+        return max(10, min(base, 90))
 
     @classmethod
     async def _check_all_tasks(cls):
@@ -133,12 +135,28 @@ class AutoTradeScheduler:
         min_interval = cls._check_interval
         logger.info(f"[Scheduler] has_dynamic={has_dynamic}, min_interval={min_interval}")
 
+        data_cache: Dict[str, Any] = {}
+
+        for task_cfg in all_tasks:
+            symbol = task_cfg["symbol"]
+            if symbol not in data_cache:
+                try:
+                    data_cache[symbol] = gold_data.get_full_data(symbol, datalen=90)
+                except Exception as e:
+                    logger.warning(f"[Scheduler] 缓存数据获取失败 {symbol}: {e}")
+                    data_cache[symbol] = None
+
+        cls._data_cache = data_cache
+        import time as _time
+        cls._data_cache_ts = _time.time()
+
         for task_cfg in all_tasks:
             try:
+                symbol = task_cfg["symbol"]
                 if is_trading_time:
-                    await cls._check_and_trade(task_cfg)
+                    await cls._check_and_trade(task_cfg, data_cache)
                     if has_dynamic:
-                        df = gold_data.get_full_data(task_cfg["symbol"], datalen=30)
+                        df = data_cache.get(symbol)
                         if df is not None and len(df) >= 5:
                             atr = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 0
                             close = float(df["收盘"].iloc[-1])
@@ -147,7 +165,7 @@ class AutoTradeScheduler:
                             min_interval = min(min_interval, task_interval)
                             logger.info(f"[Scheduler] 动态间隔计算: atr={atr}, atr_pct={atr_pct}, task_interval={task_interval}")
                 else:
-                    await cls._update_check_time(task_cfg)
+                    await cls._update_check_time(task_cfg, data_cache)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -159,12 +177,15 @@ class AutoTradeScheduler:
         cls._next_interval = min_interval if has_dynamic else cls._check_interval
 
     @classmethod
-    async def _update_check_time(cls, task_cfg: dict) -> None:
+    async def _update_check_time(cls, task_cfg: dict, data_cache: Dict[str, Any] = None) -> None:
         user_id = task_cfg["user_id"]
         symbol = task_cfg["symbol"]
         strategy = task_cfg.get("strategy", "grid")
         try:
-            df = gold_data.get_full_data(symbol, datalen=90)
+            if data_cache and symbol in data_cache:
+                df = data_cache[symbol]
+            else:
+                df = gold_data.get_full_data(symbol, datalen=90)
             if df is not None and len(df) >= 20:
                 latest = df.iloc[-1]
                 close = float(latest["收盘"])
@@ -200,7 +221,7 @@ class AutoTradeScheduler:
         except Exception as e:
             signal_str = "观望"
             logger.debug(f"[OffHours] {user_id}/{symbol} 计算信号异常: {e}")
-        AutoTradeTask.update_last_check(user_id, symbol, signal_str)
+        AutoTradeTask.update_last_check(task_cfg["id"], signal_str)
 
     @classmethod
     def _is_trading_time(cls) -> bool:
@@ -216,7 +237,7 @@ class AutoTradeScheduler:
         return False
 
     @classmethod
-    async def _check_and_trade(cls, task_cfg: dict) -> None:
+    async def _check_and_trade(cls, task_cfg: dict, data_cache: Dict[str, Any] = None) -> None:
         user_id = task_cfg["user_id"]
         symbol = task_cfg["symbol"]
 
@@ -226,7 +247,10 @@ class AutoTradeScheduler:
         take_profit_pct = task_cfg.get("take_profit_pct", 10.0)
         trend_ma_key = task_cfg.get("trend_ma_key")
 
-        df = gold_data.get_full_data(symbol, datalen=90)
+        if data_cache and symbol in data_cache:
+            df = data_cache[symbol]
+        else:
+            df = gold_data.get_full_data(symbol, datalen=90)
         if df is None or len(df) < 20:
             return
 
@@ -258,14 +282,14 @@ class AutoTradeScheduler:
                 logger.warning(f"[StopLoss] {user_id}/{symbol} 触发止损 ({total_pnl_pct:.1f}% ≤ {stop_loss_pct:.1f}%)")
                 await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
                                                 f"止损触发 ({total_pnl_pct:.1f}%)", "stop_loss")
-                AutoTradeTask.record_trade(user_id, symbol, "sell")
+                AutoTradeTask.record_trade(task_cfg["id"], "sell")
                 return
 
             if total_pnl_pct >= take_profit_pct:
                 logger.info(f"[TakeProfit] {user_id}/{symbol} 触发止盈 ({total_pnl_pct:.1f}% ≥ {take_profit_pct:.1f}%)")
                 await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
                                                 f"止盈触发 ({total_pnl_pct:.1f}%)", "take_profit")
-                AutoTradeTask.record_trade(user_id, symbol, "sell")
+                AutoTradeTask.record_trade(task_cfg["id"], "sell")
                 return
 
         # ========== 3. 趋势过滤 ==========
@@ -321,13 +345,12 @@ class AutoTradeScheduler:
 
         # ========== 6. 信号一致性确认（连续 N 次相同信号才执行）==========
         signal_confirmed = AutoTradeTask.update_consecutive_signals(
-            user_id, symbol, signal["signal"], CONSECUTIVE_SIGNALS_REQUIRED
+            task_cfg["id"], signal["signal"], CONSECUTIVE_SIGNALS_REQUIRED
         )
-        AutoTradeTask.update_last_check(user_id, symbol, signal.get("signal"))
 
         # ========== 7. 更新浮动盈亏 ==========
         AutoTradeTask.update_runtime(
-            user_id, symbol,
+            task_cfg["id"],
             task_cash=task_cash,
             task_pnl=task_pnl,
             position_shares=cur_shares,
@@ -344,13 +367,13 @@ class AutoTradeScheduler:
             return
 
         # ========== 8. 冷却期检查 ==========
-        if AutoTradeTask.is_in_cooldown(user_id, symbol):
+        if AutoTradeTask.is_in_cooldown(task_cfg["id"]):
             cooldown = task_cfg.get("cooldown_seconds", 60)
             logger.debug(f"[Cooldown] {user_id}/{symbol} 在冷却期内 ({cooldown}s)，跳过交易")
             return
 
         # ========== 9. 每日交易上限检查 ==========
-        if not AutoTradeTask.can_trade_today(user_id, symbol):
+        if not AutoTradeTask.can_trade_today(task_cfg["id"]):
             max_trades = task_cfg.get("max_daily_trades", 50)
             logger.warning(f"[DailyLimit] {user_id}/{symbol} 已达今日交易上限 ({max_trades}次)，跳过")
             return
@@ -420,7 +443,7 @@ class AutoTradeScheduler:
                 transfer_fee = sell_proceeds * transfer_fee_rate if symbol.startswith("sh") else 0
                 net_proceeds = sell_proceeds - max(sell_proceeds * commission_rate, min_commission) - stamp_tax - transfer_fee
                 task_cash += net_proceeds
-                pnl = (close - cur_avg_cost) * shares
+                pnl = net_proceeds - cur_avg_cost * shares
                 task_pnl += pnl
                 cur_shares -= shares
                 if cur_shares == 0:
@@ -437,7 +460,7 @@ class AutoTradeScheduler:
                 position_avg_cost=cur_avg_cost,
                 task_name=trade_name,
             )
-            AutoTradeTask.record_trade(user_id, symbol, action_str)
+            AutoTradeTask.record_trade(task_cfg["id"], action_str)
 
     @classmethod
     async def _force_close_position(cls, user_id, symbol, close, shares, task_cfg, reason, close_type):
@@ -465,7 +488,7 @@ class AutoTradeScheduler:
             net_proceeds = sell_proceeds - max(sell_proceeds * commission_rate, min_commission) - stamp_tax - transfer_fee
 
             cur_avg_cost = task_cfg.get("position_avg_cost", 0)
-            pnl = (close - cur_avg_cost) * shares
+            pnl = net_proceeds - cur_avg_cost * shares
             new_cash = task_cfg.get("task_cash", 0) + net_proceeds
             new_pnl = task_cfg.get("task_pnl", 0) + pnl
 
@@ -488,13 +511,14 @@ class AutoTradeScheduler:
         logger.info(f"[Scheduler] get_status called: user_id={user_id}, symbol={symbol}, scheduler_running={scheduler_running}")
         
         def _calc_unrealized(task_cfg: dict) -> float:
-            """基于实时价格计算浮动盈亏"""
             shares = task_cfg.get("position_shares", 0) or 0
             avg_cost = task_cfg.get("position_avg_cost", 0) or 0
             if shares <= 0 or avg_cost <= 0:
                 return task_cfg.get("unrealized_pnl", 0) or 0
             try:
-                df = gold_data.get_full_data(task_cfg["symbol"], datalen=5)
+                df = cls._data_cache.get(task_cfg["symbol"]) if cls._data_cache else None
+                if df is None or len(df) == 0:
+                    df = gold_data.get_full_data(task_cfg["symbol"], datalen=5)
                 if df is not None and len(df) > 0:
                     close = float(df["收盘"].iloc[-1])
                     return (close - avg_cost) * shares
@@ -528,7 +552,7 @@ class AutoTradeScheduler:
                 "last_trade_time": task_cfg.get("last_trade_time"),
                 "last_trade_direction": task_cfg.get("last_trade_direction"),
                 "consecutive_signals": task_cfg.get("consecutive_signals", 0),
-                "in_cooldown": AutoTradeTask.is_in_cooldown(task_cfg["user_id"], task_cfg["symbol"]),
+                "in_cooldown": AutoTradeTask.is_in_cooldown(task_cfg["id"]),
             }
 
         tasks = AutoTradeTask.find_by_user(user_id)
@@ -556,19 +580,20 @@ class AutoTradeScheduler:
                 "last_trade_time": t.get("last_trade_time"),
                 "last_trade_direction": t.get("last_trade_direction"),
                 "consecutive_signals": t.get("consecutive_signals", 0),
-                "in_cooldown": AutoTradeTask.is_in_cooldown(t["user_id"], t["symbol"]),
+                "in_cooldown": AutoTradeTask.is_in_cooldown(t["id"]),
             })
         return result
 
     @classmethod
     def _calc_task_signal(cls, task_cfg: dict) -> Optional[Dict[str, Any]]:
-        """计算任务当前的交易信号"""
         try:
             symbol = task_cfg.get("symbol")
             if not symbol:
                 return None
 
-            df = gold_data.get_full_data(symbol, datalen=90)
+            df = cls._data_cache.get(symbol) if cls._data_cache else None
+            if df is None or len(df) < 20:
+                df = gold_data.get_full_data(symbol, datalen=90)
             if df is None or len(df) < 20:
                 return None
 

@@ -102,12 +102,15 @@ class AutoTradeTask:
             return [cls.from_row(r) for r in rows]
 
     @classmethod
-    def find_by_symbol(cls, user_id, symbol):
+    def find_by_symbol(cls, user_id, symbol, strategy=None):
         with get_session() as session:
-            row = session.query(AutoTradeTaskModel).filter(
+            query = session.query(AutoTradeTaskModel).filter(
                 AutoTradeTaskModel.user_id == user_id,
                 AutoTradeTaskModel.symbol == symbol,
-            ).first()
+            )
+            if strategy:
+                query = query.filter(AutoTradeTaskModel.strategy == strategy)
+            row = query.first()
             return cls.from_row(row) if row else None
 
     @classmethod
@@ -217,21 +220,19 @@ class AutoTradeTask:
             return cls.from_row(row) if row else None
 
     @classmethod
-    def update_last_check(cls, user_id, symbol, last_signal: str = None):
+    def update_last_check(cls, task_id, last_signal: str = None):
         import logging
         logger = logging.getLogger(__name__)
         with get_session() as session:
             model = session.query(AutoTradeTaskModel).filter(
-                AutoTradeTaskModel.user_id == user_id,
-                AutoTradeTaskModel.symbol == symbol,
+                AutoTradeTaskModel.id == task_id,
             ).first()
             if model:
                 model.last_check = china_now_naive()
                 model.last_signal = last_signal
                 model.updated_at = china_now_naive()
-                logger.info(f"[AutoTrade] update_last_check: user={user_id}, symbol={symbol}, signal={last_signal}")
             else:
-                logger.warning(f"[AutoTrade] update_last_check: 任务不存在 user={user_id}, symbol={symbol}")
+                logger.warning(f"[AutoTrade] update_last_check: 任务不存在 id={task_id}")
 
     @classmethod
     def update_runtime(cls, user_id, symbol, task_cash: float, task_pnl: float,
@@ -295,18 +296,15 @@ class AutoTradeTask:
                 model.updated_at = china_now_naive()
 
     @classmethod
-    def is_in_cooldown(cls, user_id, symbol) -> bool:
-        """检查是否在冷却期内"""
-        from datetime import datetime as dt
+    def is_in_cooldown(cls, task_id) -> bool:
         with get_session() as session:
             model = session.query(AutoTradeTaskModel).filter(
-                AutoTradeTaskModel.user_id == user_id,
-                AutoTradeTaskModel.symbol == symbol,
+                AutoTradeTaskModel.id == task_id,
             ).first()
             if not model or not model.last_trade_time:
                 return False
             cooldown = getattr(model, 'cooldown_seconds', 60) or 60
-            elapsed = (dt.utcnow() - model.last_trade_time).total_seconds()
+            elapsed = (china_now_naive() - model.last_trade_time).total_seconds()
             return elapsed < cooldown
 
     @classmethod
@@ -330,12 +328,10 @@ class AutoTradeTask:
             return (model.trade_count_today or 0) < max_trades
 
     @classmethod
-    def update_consecutive_signals(cls, user_id, symbol, current_signal: str, required_streak: int = 2):
-        """更新连续信号计数，返回是否达到阈值"""
+    def update_consecutive_signals(cls, task_id, current_signal: str, required_streak: int = 2):
         with get_session() as session:
             model = session.query(AutoTradeTaskModel).filter(
-                AutoTradeTaskModel.user_id == user_id,
-                AutoTradeTaskModel.symbol == symbol,
+                AutoTradeTaskModel.id == task_id,
             ).first()
             if not model:
                 return False
@@ -386,4 +382,11 @@ class AutoTradeTask:
             for col_name, col_type in new_cols.items():
                 if col_name not in columns:
                     conn.execute(text(f"ALTER TABLE auto_trade_tasks ADD COLUMN {col_name} {col_type}"))
+
+            idx_names = [idx["name"] for idx in inspector.get_indexes("auto_trade_tasks")]
+            if "ix_auto_trade_tasks_enabled" not in idx_names:
+                conn.execute(text("CREATE INDEX ix_auto_trade_tasks_enabled ON auto_trade_tasks (enabled)"))
+            if "ix_auto_trade_tasks_user_id" not in idx_names:
+                conn.execute(text("CREATE INDEX ix_auto_trade_tasks_user_id ON auto_trade_tasks (user_id)"))
+
             conn.commit()

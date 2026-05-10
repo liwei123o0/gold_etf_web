@@ -76,7 +76,7 @@ class AutoTradeService:
         db_cash = task_config.get("task_cash", 0)
         if db_cash <= 0:
             AutoTradeTask.update_runtime(
-                user_id, symbol,
+                task_id,
                 task_cash=task_config.get("allocated_funds", 0),
                 task_pnl=0,
                 position_shares=0,
