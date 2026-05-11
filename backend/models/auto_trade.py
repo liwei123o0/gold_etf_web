@@ -45,6 +45,9 @@ class AutoTradeTaskModel(Base):
     consecutive_signals = Column(Integer, default=0)  # 连续信号计数
     cooldown_seconds = Column(Integer, default=60)  # 冷却时间(秒)
     max_daily_trades = Column(Integer, default=50)  # 每日最大交易次数
+    max_drawdown_pct = Column(Numeric, default=-15.0)  # 最大回撤阈值(%)
+    peak_value = Column(Numeric, default=0)  # 历史净值峰值(用于回撤计算)
+    consecutive_losses = Column(Integer, default=0)  # 连续亏损次数
     created_at = Column(DateTime, default=china_now_naive)  # 创建时间
     updated_at = Column(DateTime, default=china_now_naive, onupdate=china_now_naive)  # 更新时间
 
@@ -86,6 +89,9 @@ class AutoTradeTask:
             "consecutive_signals": getattr(row, 'consecutive_signals', 0) or 0,
             "cooldown_seconds": getattr(row, 'cooldown_seconds', 60) or 60,
             "max_daily_trades": getattr(row, 'max_daily_trades', 50) or 50,
+            "max_drawdown_pct": float(getattr(row, 'max_drawdown_pct', -15.0) or -15.0),
+            "peak_value": float(getattr(row, 'peak_value', 0) or 0),
+            "consecutive_losses": getattr(row, 'consecutive_losses', 0) or 0,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -153,6 +159,11 @@ class AutoTradeTask:
                 existing.dynamic_interval = config.get("dynamic_interval", existing.dynamic_interval)
                 existing.cooldown_seconds = config.get("cooldown_seconds", existing.cooldown_seconds)
                 existing.max_daily_trades = config.get("max_daily_trades", existing.max_daily_trades)
+                existing.max_drawdown_pct = config.get("max_drawdown_pct", existing.max_drawdown_pct)
+                if "peak_value" in config:
+                    existing.peak_value = config.get("peak_value", existing.peak_value)
+                if "consecutive_losses" in config:
+                    existing.consecutive_losses = config.get("consecutive_losses", existing.consecutive_losses)
 
                 if "position_shares" in config or "position_avg_cost" in config:
                     existing.position_shares = config.get("position_shares", existing.position_shares)
@@ -194,6 +205,9 @@ class AutoTradeTask:
                     trend_ma_key=config.get("trend_ma_key"),
                     dynamic_interval=config.get("dynamic_interval", False),
                     task_name=config.get("task_name", symbol),
+                    max_drawdown_pct=config.get("max_drawdown_pct", -15.0),
+                    peak_value=config.get("peak_value", 0),
+                    consecutive_losses=config.get("consecutive_losses", 0),
                     created_at=china_now_naive(),
                     updated_at=china_now_naive(),
                 )
@@ -303,9 +317,18 @@ class AutoTradeTask:
             ).first()
             if not model or not model.last_trade_time:
                 return False
-            cooldown = getattr(model, 'cooldown_seconds', 60) or 60
+            base_cooldown = getattr(model, 'cooldown_seconds', 60) or 60
+            consecutive_losses = getattr(model, 'consecutive_losses', 0) or 0
+            if consecutive_losses >= 3:
+                effective_cooldown = 300
+            elif consecutive_losses >= 2:
+                effective_cooldown = 180
+            elif consecutive_losses >= 1:
+                effective_cooldown = 120
+            else:
+                effective_cooldown = base_cooldown
             elapsed = (china_now_naive() - model.last_trade_time).total_seconds()
-            return elapsed < cooldown
+            return elapsed < effective_cooldown
 
     @classmethod
     def can_trade_today(cls, user_id, symbol) -> bool:
@@ -346,6 +369,44 @@ class AutoTradeTask:
             return (model.consecutive_signals or 0) >= required_streak
 
     @classmethod
+    def update_peak_and_drawdown(cls, task_id, current_value: float) -> float:
+        """更新历史峰值并返回当前回撤百分比。
+        current_value = 任务当前净值 (可用资金 + 持仓市值)
+        返回: drawdown_pct (负数，如 -8.5 表示从峰值回撤 8.5%)
+        """
+        with get_session() as session:
+            model = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.id == task_id,
+            ).first()
+            if not model:
+                return 0.0
+            peak = float(model.peak_value or 0)
+            if current_value > peak:
+                model.peak_value = current_value
+                peak = current_value
+            drawdown_pct = 0.0
+            if peak > 0:
+                drawdown_pct = (current_value - peak) / peak * 100
+            model.updated_at = china_now_naive()
+            return drawdown_pct
+
+    @classmethod
+    def update_consecutive_losses(cls, task_id, is_loss: bool):
+        """更新连续亏损次数，返回当前连续亏损数"""
+        with get_session() as session:
+            model = session.query(AutoTradeTaskModel).filter(
+                AutoTradeTaskModel.id == task_id,
+            ).first()
+            if not model:
+                return 0
+            if is_loss:
+                model.consecutive_losses = (model.consecutive_losses or 0) + 1
+            else:
+                model.consecutive_losses = 0
+            model.updated_at = china_now_naive()
+            return model.consecutive_losses
+
+    @classmethod
     def migrate_schema(cls):
         """Add new columns for existing tables (safe to run multiple times)"""
         from .db import engine
@@ -378,6 +439,9 @@ class AutoTradeTask:
                 "consecutive_signals": "INTEGER DEFAULT 0",
                 "cooldown_seconds": "INTEGER DEFAULT 60",
                 "max_daily_trades": "INTEGER DEFAULT 50",
+                "max_drawdown_pct": "NUMERIC DEFAULT -15.0",
+                "peak_value": "NUMERIC DEFAULT 0",
+                "consecutive_losses": "INTEGER DEFAULT 0",
             }
             for col_name, col_type in new_cols.items():
                 if col_name not in columns:

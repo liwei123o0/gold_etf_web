@@ -3,6 +3,9 @@ from typing import Dict, Type, List, Dict as DictType
 from .base import BaseStrategy
 from .grid_strategy import GridStrategy
 from .ma_trend_strategy import MATrendStrategy
+from .bollinger_strategy import BollingerStrategy
+from .rsi_strategy import RSIStrategy
+from .macd_cross_strategy import MACDCrossStrategy
 
 
 class StrategyFactory:
@@ -14,6 +17,9 @@ class StrategyFactory:
             cls._registry = {
                 "grid": GridStrategy(),
                 "ma_trend": MATrendStrategy(),
+                "bollinger": BollingerStrategy(),
+                "rsi": RSIStrategy(),
+                "macd_cross": MACDCrossStrategy(),
             }
 
     @classmethod

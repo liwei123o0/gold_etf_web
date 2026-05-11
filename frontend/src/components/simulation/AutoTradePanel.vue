@@ -118,6 +118,7 @@ const addForm = ref({
   take_profit_pct: 10.0,
   trend_ma_key: '',
   dynamic_interval: false,
+  max_drawdown_pct: -15.0,
   position_shares: 0,
   position_avg_cost: 0,
 })
@@ -137,6 +138,7 @@ const editForm = ref({
   take_profit_pct: 10.0,
   trend_ma_key: '',
   dynamic_interval: false,
+  max_drawdown_pct: -15.0,
   position_shares: 0,
   position_avg_cost: 0,
 })
@@ -146,6 +148,9 @@ const maKeyOptions = ['MA5', 'MA10', 'MA20', 'MA60']
 const strategyOptions = [
   { value: 'grid', label: '网格交易' },
   { value: 'ma_trend', label: 'MA趋势跟踪' },
+  { value: 'bollinger', label: '布林带均值回归' },
+  { value: 'rsi', label: 'RSI超买超卖' },
+  { value: 'macd_cross', label: 'MACD金叉死叉' },
 ]
 
 function signalColor(signal: string | null) {
@@ -165,12 +170,16 @@ function signalBg(signal: string | null) {
 }
 
 const isGridStrategy = computed(() => addForm.value.strategy === 'grid')
+const isBollingerStrategy = computed(() => addForm.value.strategy === 'bollinger')
+const isRSIStrategy = computed(() => addForm.value.strategy === 'rsi')
+const isMACDCrossStrategy = computed(() => addForm.value.strategy === 'macd_cross')
 
 function openAddForm() {
   addForm.value = {
     symbol: '', strategy: 'grid', grid_count: 10, base_ma_key: 'MA20',
     grid_spread: 0.10, position_size: 1.0, check_interval: 30, allocated_funds: 30000,
     stop_loss_pct: -5.0, take_profit_pct: 10.0, trend_ma_key: '', dynamic_interval: false,
+    max_drawdown_pct: -15.0,
     position_shares: 0, position_avg_cost: 0,
   }
   addError.value = null
@@ -211,6 +220,7 @@ function openEditForm(taskId: number) {
     take_profit_pct: task.task.take_profit_pct ?? 10.0,
     trend_ma_key: task.task.trend_ma_key ?? '',
     dynamic_interval: task.task.dynamic_interval ?? false,
+    max_drawdown_pct: task.task.max_drawdown_pct ?? -15.0,
     position_shares: task.task_position?.shares ?? 0,
     position_avg_cost: task.task_position?.avg_cost ?? 0,
   }
@@ -333,7 +343,7 @@ function strategyLabel(s: string) {
             <input v-model.number="addForm.grid_spread" type="number" min="0.01" max="0.50" step="0.01" class="input" />
           </div>
         </template>
-        <template v-else>
+        <template v-else-if="addForm.strategy === 'ma_trend'">
           <div class="form-item">
             <label>快线均线</label>
             <select v-model="addForm.base_ma_key" class="input select">
@@ -342,6 +352,36 @@ function strategyLabel(s: string) {
           </div>
           <div class="form-item">
             <label>慢线均线（趋势过滤）</label>
+            <select v-model="addForm.trend_ma_key" class="input select">
+              <option value="">不启用</option>
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+        </template>
+        <template v-else-if="isBollingerStrategy">
+          <div class="form-item">
+            <label>趋势过滤均线</label>
+            <select v-model="addForm.trend_ma_key" class="input select">
+              <option value="">不启用</option>
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+        </template>
+        <template v-else-if="isRSIStrategy">
+          <div class="form-item">
+            <label>超卖阈值</label>
+            <input v-model.number="addForm.rsi_oversold" type="number" min="10" max="40" step="5" class="input" />
+            <span class="unit">（默认30）</span>
+          </div>
+          <div class="form-item">
+            <label>超买阈值</label>
+            <input v-model.number="addForm.rsi_overbought" type="number" min="60" max="90" step="5" class="input" />
+            <span class="unit">（默认70）</span>
+          </div>
+        </template>
+        <template v-else-if="isMACDCrossStrategy">
+          <div class="form-item">
+            <label>趋势过滤均线</label>
             <select v-model="addForm.trend_ma_key" class="input select">
               <option value="">不启用</option>
               <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
@@ -371,6 +411,11 @@ function strategyLabel(s: string) {
           <label>止盈触发%</label>
           <input v-model.number="addForm.take_profit_pct" type="number" min="1" max="50" step="1" class="input" />
           <span class="unit">%（如10=赚10%清仓）</span>
+        </div>
+        <div class="form-item">
+          <label>最大回撤%</label>
+          <input v-model.number="addForm.max_drawdown_pct" type="number" min="-50" max="0" step="1" class="input" />
+          <span class="unit">%（如-15=回撤15%暂停）</span>
         </div>
         <div class="form-item">
           <label>动态间隔</label>
@@ -425,7 +470,7 @@ function strategyLabel(s: string) {
             <input v-model.number="editForm.grid_spread" type="number" min="0.01" max="0.50" step="0.01" class="input" />
           </div>
         </template>
-        <template v-else>
+        <template v-else-if="editForm.strategy === 'ma_trend'">
           <div class="form-item">
             <label>快线均线</label>
             <select v-model="editForm.base_ma_key" class="input select">
@@ -434,6 +479,34 @@ function strategyLabel(s: string) {
           </div>
           <div class="form-item">
             <label>慢线均线（趋势过滤）</label>
+            <select v-model="editForm.trend_ma_key" class="input select">
+              <option value="">不启用</option>
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+        </template>
+        <template v-else-if="editForm.strategy === 'bollinger'">
+          <div class="form-item">
+            <label>趋势过滤均线</label>
+            <select v-model="editForm.trend_ma_key" class="input select">
+              <option value="">不启用</option>
+              <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
+            </select>
+          </div>
+        </template>
+        <template v-else-if="editForm.strategy === 'rsi'">
+          <div class="form-item">
+            <label>超卖阈值</label>
+            <input v-model.number="editForm.rsi_oversold" type="number" min="10" max="40" step="5" class="input" />
+          </div>
+          <div class="form-item">
+            <label>超买阈值</label>
+            <input v-model.number="editForm.rsi_overbought" type="number" min="60" max="90" step="5" class="input" />
+          </div>
+        </template>
+        <template v-else-if="editForm.strategy === 'macd_cross'">
+          <div class="form-item">
+            <label>趋势过滤均线</label>
             <select v-model="editForm.trend_ma_key" class="input select">
               <option value="">不启用</option>
               <option v-for="ma in maKeyOptions" :key="ma" :value="ma">{{ ma }}</option>
@@ -463,6 +536,11 @@ function strategyLabel(s: string) {
           <label>止盈触发%</label>
           <input v-model.number="editForm.take_profit_pct" type="number" min="1" max="50" step="1" class="input" />
           <span class="unit">%（如10=赚10%清仓）</span>
+        </div>
+        <div class="form-item">
+          <label>最大回撤%</label>
+          <input v-model.number="editForm.max_drawdown_pct" type="number" min="-50" max="0" step="1" class="input" />
+          <span class="unit">%（如-15=回撤15%暂停）</span>
         </div>
         <div class="form-item">
           <label>动态间隔</label>
@@ -511,7 +589,7 @@ function strategyLabel(s: string) {
               <span class="task-name">{{ getRealtimeName(ts.symbol) || ts.task_name || '' }}</span>
               <span class="task-symbol">{{ formatSymbolForDisplay(ts.symbol) }}</span>
             </div>
-            <span class="task-strategy">{{ ts.task.strategy === 'grid' ? '网格' : 'MA趋势' }}</span>
+            <span class="task-strategy">{{ strategyLabel(ts.task.strategy) }}</span>
             <span v-if="ts.task.trend_ma_key" class="task-tag">趋势过滤({{ ts.task.trend_ma_key }})</span>
             <span v-if="ts.task.dynamic_interval" class="task-tag">动态间隔</span>
           </div>
@@ -581,6 +659,19 @@ function strategyLabel(s: string) {
                 <span style="color: #26a69a">止{{ ts.task.take_profit_pct ?? 10 }}%</span>
                 /
                 <span style="color: #ef5350">损{{ (ts.task.stop_loss_pct ?? -5) }}%</span>
+              </span>
+            </div>
+            <div class="param-item">
+              <span class="param-label">最大回撤</span>
+              <span class="param-value" style="color: #ff9800">
+                {{ (ts.task.max_drawdown_pct ?? -15) }}%
+              </span>
+            </div>
+            <div v-if="(ts.task.consecutive_losses ?? 0) > 0" class="param-item">
+              <span class="param-label">连续亏损</span>
+              <span class="param-value" :style="{ color: (ts.task.consecutive_losses ?? 0) >= 3 ? '#ef5350' : '#ff9800' }">
+                {{ ts.task.consecutive_losses }}次
+                <span v-if="(ts.task.consecutive_losses ?? 0) >= 1" class="cooldown-tag">冷却延长</span>
               </span>
             </div>
           </div>
@@ -974,4 +1065,5 @@ function strategyLabel(s: string) {
 .tag-dynamic { background: rgba(255,183,77,0.15); color: #ffb74d; }
 .strategy-tag { background: rgba(149,117,205,0.15); color: #9575cd; }
 .task-tag { font-size: 11px; color: #42a5f5; background: rgba(33,150,243,0.1); padding: 1px 6px; border-radius: 3px; }
+.cooldown-tag { font-size: 10px; color: #ff9800; background: rgba(255,152,0,0.1); padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
 </style>

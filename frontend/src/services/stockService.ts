@@ -389,6 +389,9 @@ export interface AutoTradeTask {
   take_profit_pct: number
   trend_ma_key: string | null
   dynamic_interval: boolean
+  max_drawdown_pct: number
+  peak_value?: number
+  consecutive_losses?: number
 }
 
 export interface TaskStatus {

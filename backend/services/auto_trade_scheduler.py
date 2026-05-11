@@ -228,9 +228,12 @@ class AutoTradeScheduler:
     @classmethod
     def _is_trading_time(cls) -> bool:
         from backend.utils.timezone import get_china_now
+        from backend.services.gold_data import is_trade_date
         now = get_china_now()
-        if now.weekday() >= 5:
+
+        if not is_trade_date(now.date()):
             return False
+
         hour, minute = now.hour, now.minute
         if (hour == 9 and minute >= 30) or (9 < hour < 11) or (hour == 11 and minute <= 30):
             return True
@@ -397,6 +400,14 @@ class AutoTradeScheduler:
                 task_name=trade_name,
             )
             AutoTradeTask.record_trade(task_cfg["id"], action_str)
+
+            is_loss = False
+            if action_str == "卖出" and cur_shares > 0 and cur_avg_cost > 0:
+                is_loss = close < cur_avg_cost
+            elif action_str == "买入":
+                is_loss = False
+            AutoTradeTask.update_consecutive_losses(task_cfg["id"], is_loss)
+
             logger.info(f"[AutoTradeScheduler] {user_id}/{symbol} {action_str} {shares}股 @ {close:.4f}, 建议仓位={delta['effective_ratio']:.2%}, 当前仓位={delta['current_position_ratio']:.2%}, 偏差={value_diff:.2f}")
             return {"action": action_str, "shares": shares, "close": close}
 
@@ -431,6 +442,20 @@ class AutoTradeScheduler:
         cur_shares = sim_pos["shares"]
         cur_avg_cost = sim_pos["avg_cost"]
         task_cash = cls._calc_task_cash(allocated_funds, cur_shares, cur_avg_cost)
+
+        current_value = task_cash + cur_shares * close
+        if allocated_funds > 0 and current_value <= 0:
+            logger.warning(f"[Drawdown] {user_id}/{symbol} 任务净值归零，暂停任务")
+            AutoTradeTask.update_enabled(task_cfg["id"], False)
+            return
+
+        if allocated_funds > 0:
+            drawdown_pct = AutoTradeTask.update_peak_and_drawdown(task_cfg["id"], current_value)
+            max_drawdown_pct = task_cfg.get("max_drawdown_pct", -15.0)
+            if max_drawdown_pct < 0 and drawdown_pct <= max_drawdown_pct:
+                logger.warning(f"[Drawdown] {user_id}/{symbol} 触发最大回撤保护 (回撤{drawdown_pct:.1f}% ≤ 阈值{max_drawdown_pct:.1f}%)，暂停任务")
+                AutoTradeTask.update_enabled(task_cfg["id"], False)
+                return
 
         sl_result = await cls._check_stop_loss_take_profit(task_cfg, close, cur_shares, cur_avg_cost)
         if sl_result:
@@ -503,6 +528,8 @@ class AutoTradeScheduler:
                 position_avg_cost=new_sim_pos["avg_cost"],
                 task_name=task_cfg.get("task_name", symbol),
             )
+            is_loss = close < (task_cfg.get("position_avg_cost", 0) or 0)
+            AutoTradeTask.update_consecutive_losses(task_cfg["id"], is_loss)
             logger.warning(f"[{close_type.upper()}] {user_id}/{symbol} 已清仓 {shares}股 @ {close:.4f}, 原因={reason}")
         else:
             logger.error(f"[{close_type.upper()}] {user_id}/{symbol} 清仓失败: {result.get('error', '')}")

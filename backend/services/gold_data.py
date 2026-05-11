@@ -206,6 +206,58 @@ def _symbol_to_ts_code(symbol: str) -> str:
         return symbol + '.SH'
 
 
+_trade_calendar_cache: Dict[str, set] = {}
+
+
+def fetch_trade_calendar(year: int = None) -> set:
+    """从 Tushare 获取A股交易日历，返回该年交易日集合 (YYYYMMDD 格式)。
+    结果缓存到进程内，同一年只请求一次。
+    """
+    if year is None:
+        year = datetime.now().year
+
+    cache_key = str(year)
+    if cache_key in _trade_calendar_cache:
+        return _trade_calendar_cache[cache_key]
+
+    try:
+        import tushare as ts
+        ts.set_token(TUSHARE_TOKEN)
+        pro = ts.pro_api()
+
+        start = f"{year}0101"
+        end = f"{year}1231"
+        df_cal = pro.trade_cal(exchange='SSE', start_date=start, end_date=end)
+        if df_cal is not None and not df_cal.empty:
+            trade_dates = set(df_cal[df_cal['is_open'] == 1]['cal_date'].astype(str).tolist())
+            _trade_calendar_cache[cache_key] = trade_dates
+            logger.info(f"[TradeCalendar] 获取 {year} 年交易日历成功，共 {len(trade_dates)} 个交易日")
+            return trade_dates
+    except ImportError:
+        logger.warning("[TradeCalendar] tushare 未安装，跳过交易日历获取")
+    except Exception as e:
+        logger.error(f"[TradeCalendar] 获取交易日历失败: {e}")
+
+    _trade_calendar_cache[cache_key] = set()
+    return set()
+
+
+def is_trade_date(check_date: date_type = None) -> bool:
+    """判断指定日期是否为A股交易日。
+    优先使用 Tushare 交易日历，获取失败时回退到简单工作日判断。
+    """
+    if check_date is None:
+        check_date = datetime.now().date()
+
+    date_str = check_date.strftime('%Y%m%d')
+    cal = fetch_trade_calendar(check_date.year)
+
+    if cal:
+        return date_str in cal
+
+    return check_date.weekday() < 5
+
+
 def _parse_date_param(value: Optional[str]) -> Optional[date_type]:
     """
     解析日期参数，支持 YYYYMMDD 和 YYYY-MM-DD 格式。
