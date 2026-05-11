@@ -14,6 +14,35 @@ const emit = defineEmits<{
 const showDetails = ref(true)
 const showConfirm = ref(false)
 
+const TRADE_TYPE_LABELS: Record<string, string> = {
+  manual: '手动交易',
+  auto: '自动策略',
+  auto_grid: '网格策略',
+  auto_ma_trend: '均线趋势',
+  auto_bollinger: '布林带',
+  auto_rsi: 'RSI策略',
+  auto_macd_cross: 'MACD交叉',
+  auto_stop_loss: '止损',
+  auto_take_profit: '止盈',
+}
+
+function getTradeTypeLabel(type?: string): string {
+  if (!type) return '手动交易'
+  if (TRADE_TYPE_LABELS[type]) return TRADE_TYPE_LABELS[type]
+  if (type.startsWith('auto_')) {
+    const strategy = type.replace('auto_', '')
+    return `自动-${strategy}`
+  }
+  return type
+}
+
+function getTradeTypeClass(type?: string): string {
+  if (!type || type === 'manual') return 'manual'
+  if (type === 'auto_stop_loss') return 'stop-loss'
+  if (type === 'auto_take_profit') return 'take-profit'
+  return 'auto'
+}
+
 function handleClear() {
   showConfirm.value = false
   emit('clear')
@@ -45,7 +74,7 @@ function handleClear() {
             <th>证券</th>
             <th>价格</th>
             <th>数量</th>
-            <th>类型</th>
+            <th>策略类型</th>
             <th>手续费</th>
             <th>盈亏</th>
           </tr>
@@ -63,8 +92,8 @@ function handleClear() {
             <td>{{ o.price.toFixed(3) }}</td>
             <td>{{ o.shares }}</td>
             <td>
-              <span class="trade-type" :class="o.trade_type">
-                {{ o.trade_type === 'manual' ? '手动' : '自动' }}
+              <span class="trade-type" :class="getTradeTypeClass(o.trade_type)">
+                {{ getTradeTypeLabel(o.trade_type) }}
               </span>
             </td>
             <td>{{ o.commission.toFixed(2) }}</td>
@@ -218,6 +247,16 @@ function handleClear() {
   &.auto {
     background: rgba(0, 242, 255, 0.15);
     color: var(--accent-cyan);
+  }
+
+  &.stop-loss {
+    background: rgba(239, 83, 80, 0.15);
+    color: #ef5350;
+  }
+
+  &.take-profit {
+    background: rgba(102, 187, 106, 0.15);
+    color: #66bb6a;
   }
 }
 </style>

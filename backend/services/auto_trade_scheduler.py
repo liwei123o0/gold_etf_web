@@ -15,6 +15,7 @@ from backend.services import simulation_trade as st
 from backend.services import gold_data
 from backend.services import grid_trade
 from backend.services.strategies import StrategyFactory
+from backend.routes.realtime import get_realtime
 from backend.utils.timezone import china_now_naive
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHECK_INTERVAL = 30
 CONSECUTIVE_SIGNALS_REQUIRED = 2   # 交易信号需连续 N 次相同才执行
 MIN_STEP_VALUE_PCT = 0.02          # 最小调仓阈值：分配资金的 2%
+
+STRATEGY_TYPE_MAP = {
+    "grid": "网格策略",
+    "ma_trend": "均线趋势",
+    "manual": "手动交易",
+}
+
+def _build_trade_type(strategy: str, close_type: str = None) -> str:
+    if close_type:
+        return f"auto_{close_type}"
+    if strategy and strategy != "manual":
+        return f"auto_{strategy}"
+    return "manual"
 
 
 class AutoTradeScheduler:
@@ -253,14 +267,37 @@ class AutoTradeScheduler:
         }
 
     @classmethod
+    def _get_task_position(cls, task_cfg: dict) -> dict:
+        """优先从模拟账户读取持仓数据，fallback到任务自身配置"""
+        user_id = task_cfg["user_id"]
+        symbol = task_cfg["symbol"]
+
+        portfolio = st.get_portfolio(user_id)
+        if portfolio:
+            sim_positions = {p["symbol"]: p for p in portfolio.get("positions", [])}
+            pos = sim_positions.get(symbol, {})
+            if pos and pos.get("shares", 0) > 0:
+                return {
+                    "shares": int(pos.get("shares", 0)),
+                    "avg_cost": float(pos.get("avg_cost", 0)),
+                }
+
+        return {
+            "shares": int(task_cfg.get("position_shares", 0) or 0),
+            "avg_cost": float(task_cfg.get("position_avg_cost", 0) or 0),
+        }
+
+    @classmethod
     def _calc_task_cash(cls, allocated_funds: float, cur_shares: int, cur_avg_cost: float) -> float:
         position_value = cur_shares * cur_avg_cost if cur_shares > 0 else 0
         return allocated_funds - position_value
 
     @classmethod
-    async def _check_stop_loss_take_profit(cls, task_cfg, close, cur_shares, cur_avg_cost) -> Optional[str]:
+    async def _check_stop_loss_take_profit(cls, task_cfg, close, cur_shares, cur_avg_cost, trade_price=None) -> Optional[str]:
         if cur_shares <= 0 or cur_avg_cost <= 0:
             return None
+        if trade_price is None:
+            trade_price = close
         stop_loss_pct = task_cfg.get("stop_loss_pct", -5.0)
         take_profit_pct = task_cfg.get("take_profit_pct", 10.0)
         total_pnl_pct = (close - cur_avg_cost) / cur_avg_cost * 100
@@ -269,14 +306,14 @@ class AutoTradeScheduler:
 
         if total_pnl_pct <= stop_loss_pct:
             logger.warning(f"[StopLoss] {user_id}/{symbol} 触发止损 ({total_pnl_pct:.1f}% ≤ {stop_loss_pct:.1f}%)")
-            await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
+            await cls._force_close_position(user_id, symbol, trade_price, cur_shares, task_cfg,
                                             f"止损触发 ({total_pnl_pct:.1f}%)", "stop_loss")
             AutoTradeTask.record_trade(task_cfg["id"], "sell")
             return "stop_loss"
 
         if total_pnl_pct >= take_profit_pct:
             logger.info(f"[TakeProfit] {user_id}/{symbol} 触发止盈 ({total_pnl_pct:.1f}% ≥ {take_profit_pct:.1f}%)")
-            await cls._force_close_position(user_id, symbol, close, cur_shares, task_cfg,
+            await cls._force_close_position(user_id, symbol, trade_price, cur_shares, task_cfg,
                                             f"止盈触发 ({total_pnl_pct:.1f}%)", "take_profit")
             AutoTradeTask.record_trade(task_cfg["id"], "sell")
             return "take_profit"
@@ -360,10 +397,14 @@ class AutoTradeScheduler:
         stamp_tax_rate = settings.get("stamp_tax_rate", 0.001)
         transfer_fee_rate = settings.get("transfer_fee_rate", 0.00002)
 
-        sim_pos = cls._get_sim_position(user_id, symbol)
+        sim_pos = cls._get_task_position(task_cfg)
         cur_shares = sim_pos["shares"]
         cur_avg_cost = sim_pos["avg_cost"]
         task_cash = cls._calc_task_cash(allocated_funds, cur_shares, cur_avg_cost)
+
+        strategy = task_cfg.get("strategy", "grid")
+        specific_trade_type = _build_trade_type(strategy)
+        strategy_type = strategy if strategy != "manual" else "manual"
 
         if value_diff > 0:
             shares = int(round(value_diff / close / 100)) * 100
@@ -374,7 +415,7 @@ class AutoTradeScheduler:
             if task_cash < (amount + commission_est):
                 logger.warning(f"[CashGuard] {user_id}/{symbol} 任务现金不足 task_cash={task_cash:.2f} < need={amount + commission_est:.2f}")
                 return None
-            result = st.execute_trade(user_id, "buy", symbol, trade_name, close, shares, trade_type="auto")
+            result = st.execute_trade(user_id, "buy", symbol, trade_name, close, shares, trade_type=specific_trade_type, strategy_type=strategy_type)
             action_str = "买入"
         else:
             sell_amount = abs(value_diff)
@@ -385,18 +426,49 @@ class AutoTradeScheduler:
             shares = (shares // 100) * 100
             if shares < 100:
                 return None
-            result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type="auto")
+            result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type=specific_trade_type, strategy_type=strategy_type)
             action_str = "卖出"
 
         if result.get("success"):
-            new_sim_pos = cls._get_sim_position(user_id, symbol)
-            new_task_cash = cls._calc_task_cash(allocated_funds, new_sim_pos["shares"], new_sim_pos["avg_cost"])
+            old_shares = cur_shares
+            old_avg_cost = cur_avg_cost
+
+            if action_str == "买入":
+                new_shares = old_shares + shares
+                if new_shares > 0:
+                    new_avg_cost = (old_shares * old_avg_cost + shares * close) / new_shares
+                else:
+                    new_avg_cost = close
+            else:
+                new_shares = max(0, old_shares - shares)
+                new_avg_cost = old_avg_cost
+
+            updated_portfolio = result.get("portfolio", {})
+            sim_positions = {p["symbol"]: p for p in updated_portfolio.get("positions", [])}
+            sim_pos = sim_positions.get(symbol, {})
+            sim_shares = int(sim_pos.get("shares", 0)) or 0
+            sim_avg_cost = float(sim_pos.get("avg_cost", 0)) or 0
+
+            if sim_shares > 0 and abs(sim_avg_cost - new_avg_cost) > 0.001:
+                logger.warning(
+                    f"[CostSync] {user_id}/{symbol} 持仓成本不一致: "
+                    f"任务计算={new_avg_cost:.4f} (基于{old_shares}股@{old_avg_cost:.4f}+{shares}股@{close:.4f}), "
+                    f"模拟账户={sim_avg_cost:.4f} ({sim_shares}股), "
+                    f"差异={abs(sim_avg_cost - new_avg_cost):.4f}, 以任务计算值为准"
+                )
+
+            if sim_shares != new_shares:
+                logger.info(
+                    f"[CostSync] {user_id}/{symbol} 持仓数量差异: 任务计算={new_shares}, 模拟账户={sim_shares}, 以任务计算值为准"
+                )
+
+            new_task_cash = cls._calc_task_cash(allocated_funds, new_shares, new_avg_cost)
             AutoTradeTask.update_runtime(
                 task_cfg["id"],
                 task_cash=new_task_cash,
                 task_pnl=0,
-                position_shares=new_sim_pos["shares"],
-                position_avg_cost=new_sim_pos["avg_cost"],
+                position_shares=new_shares,
+                position_avg_cost=new_avg_cost,
                 task_name=trade_name,
             )
             AutoTradeTask.record_trade(task_cfg["id"], action_str)
@@ -429,6 +501,18 @@ class AutoTradeScheduler:
         close = float(latest["收盘"])
         allocated_funds = task_cfg.get("allocated_funds", 0)
 
+        try:
+            rt = get_realtime(symbol)
+            trade_price = float(rt.get("price", 0)) if rt.get("price") else close
+        except Exception as e:
+            logger.warning(f"[Realtime] {user_id}/{symbol} 获取实时价格失败: {e}, 使用K线收盘价")
+            trade_price = close
+
+        try:
+            st.update_position_price(user_id, symbol, trade_price)
+        except Exception as e:
+            logger.warning(f"[Scheduler] {user_id}/{symbol} 更新持仓价格失败: {e}")
+
         portfolio = st.get_portfolio(user_id)
         account_cash = float(portfolio["account"].get("cash", 0)) if portfolio and portfolio.get("account") else 0
         if account_cash <= 0:
@@ -438,7 +522,7 @@ class AutoTradeScheduler:
                 AutoTradeTask.update_enabled(task_cfg["id"], False)
                 return
 
-        sim_pos = cls._get_sim_position(user_id, symbol, portfolio)
+        sim_pos = cls._get_task_position(task_cfg)
         cur_shares = sim_pos["shares"]
         cur_avg_cost = sim_pos["avg_cost"]
         task_cash = cls._calc_task_cash(allocated_funds, cur_shares, cur_avg_cost)
@@ -457,7 +541,7 @@ class AutoTradeScheduler:
                 AutoTradeTask.update_enabled(task_cfg["id"], False)
                 return
 
-        sl_result = await cls._check_stop_loss_take_profit(task_cfg, close, cur_shares, cur_avg_cost)
+        sl_result = await cls._check_stop_loss_take_profit(task_cfg, close, cur_shares, cur_avg_cost, trade_price)
         if sl_result:
             return
 
@@ -468,8 +552,37 @@ class AutoTradeScheduler:
             if trend_ma > 0:
                 trend_above = close > trend_ma
 
+        effective_strategy = task_cfg.get("strategy", "grid")
+        if task_cfg.get("adaptive_strategy", False):
+            from backend.services.strategies.multi_factor import calc_composite_score, get_recommended_strategy
+            composite = calc_composite_score(latest, df)
+            recommended = get_recommended_strategy(composite["score"])
+            if recommended != effective_strategy:
+                logger.info(f"[AdaptiveStrategy] {user_id}/{symbol} 策略自适应切换: {effective_strategy} → {recommended} (评分={composite['score']:.1f}, 状态={composite['market_state_cn']})")
+                effective_strategy = recommended
+            task_cfg = {**task_cfg, "strategy": effective_strategy}
+
         signal = cls._calc_trade_signal(task_cfg, latest, df)
         signal = cls._apply_trend_filter(signal, trend_above, trend_ma_key, user_id, symbol)
+
+        if task_cfg.get("use_multi_factor", False):
+            from backend.services.strategies.multi_factor import calc_composite_score
+            composite = calc_composite_score(latest, df)
+            mf_score = composite["score"]
+            mf_signal = composite["signal"]
+            mf_position = composite["position_suggestion"]
+            logger.info(f"[MultiFactor] {user_id}/{symbol} 综合评分={mf_score:.1f}, 市场状态={composite['market_state_cn']}, 评分信号={mf_signal}, 建议仓位={mf_position:.0%}")
+
+            if signal["signal"] in ("买入", "卖出") and mf_signal != signal["signal"] and mf_score * (-1 if signal["signal"] == "买入" else 1) > 30:
+                logger.info(f"[MultiFactor] {user_id}/{symbol} 多因子信号与策略信号矛盾(策略={signal['signal']}, 评分={mf_signal}), 过滤策略信号")
+                signal["signal"] = "观望"
+                signal["action_desc"] = f"多因子评分{mf_score:.0f}与策略矛盾，暂不操作"
+
+            if signal["signal"] in ("买入", "卖出"):
+                original_ratio = signal.get("position_ratio", 0.5)
+                adjusted_ratio = original_ratio * mf_position
+                signal["position_ratio"] = round(max(0.1, min(1.0, adjusted_ratio)), 4)
+                signal["action_desc"] = f"{signal.get('action_desc', '')} [评分{mf_score:.0f}仓位{mf_position:.0%}]"
 
         signal_confirmed = AutoTradeTask.update_consecutive_signals(
             task_cfg["id"], signal["signal"], CONSECUTIVE_SIGNALS_REQUIRED
@@ -480,8 +593,8 @@ class AutoTradeScheduler:
             task_cfg["id"],
             task_cash=task_cash,
             task_pnl=0,
-            position_shares=cur_shares,
-            position_avg_cost=cur_avg_cost,
+            position_shares=int(task_cfg.get("position_shares", 0) or 0),
+            position_avg_cost=float(task_cfg.get("position_avg_cost", 0) or 0),
             unrealized_pnl=unrealized,
             task_name=task_cfg.get("task_name", symbol),
         )
@@ -501,7 +614,7 @@ class AutoTradeScheduler:
 
         trade_name = latest.get("名称", symbol) or symbol
         settings = SimSettings.get(symbol)
-        cls._execute_order(task_cfg, delta, close, cur_shares, allocated_funds, trade_name, settings)
+        cls._execute_order(task_cfg, delta, trade_price, cur_shares, allocated_funds, trade_name, settings)
 
     @classmethod
     async def _force_close_position(cls, user_id, symbol, close, shares, task_cfg, reason, close_type):
@@ -513,19 +626,21 @@ class AutoTradeScheduler:
             return
 
         trade_name = task_cfg.get("task_name", symbol)
-        result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type="auto")
+        strategy = task_cfg.get("strategy", "grid")
+        specific_trade_type = _build_trade_type(strategy, close_type)
+        strategy_type = strategy if strategy != "manual" else "manual"
+        result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type=specific_trade_type, strategy_type=strategy_type)
 
         if result.get("success"):
             allocated_funds = task_cfg.get("allocated_funds", 0)
-            new_sim_pos = cls._get_sim_position(user_id, symbol)
-            new_task_cash = cls._calc_task_cash(allocated_funds, new_sim_pos["shares"], new_sim_pos["avg_cost"])
+            new_task_cash = cls._calc_task_cash(allocated_funds, 0, 0)
 
             AutoTradeTask.update_runtime(
                 task_cfg["id"],
                 task_cash=new_task_cash,
                 task_pnl=0,
-                position_shares=new_sim_pos["shares"],
-                position_avg_cost=new_sim_pos["avg_cost"],
+                position_shares=0,
+                position_avg_cost=0,
                 task_name=task_cfg.get("task_name", symbol),
             )
             is_loss = close < (task_cfg.get("position_avg_cost", 0) or 0)
@@ -540,36 +655,88 @@ class AutoTradeScheduler:
         scheduler_running = cls.is_running()
         logger.info(f"[Scheduler] get_status called: user_id={user_id}, symbol={symbol}, scheduler_running={scheduler_running}")
         
-        def _calc_unrealized(task_cfg: dict) -> float:
+        def _calc_unrealized(task_cfg: dict, rt_price: float = 0) -> float:
             shares = task_cfg.get("position_shares", 0) or 0
             avg_cost = task_cfg.get("position_avg_cost", 0) or 0
             if shares <= 0 or avg_cost <= 0:
-                return task_cfg.get("unrealized_pnl", 0) or 0
+                return 0
+            close = rt_price
+            if close <= 0:
+                try:
+                    df = cls._data_cache.get(task_cfg["symbol"]) if cls._data_cache else None
+                    if df is None or len(df) == 0:
+                        df = gold_data.get_full_data(task_cfg["symbol"], datalen=5)
+                    if df is not None and len(df) > 0:
+                        close = float(df["收盘"].iloc[-1])
+                except Exception as e:
+                    logger.warning(f"[Scheduler] 计算实时浮动盈亏失败: {e}")
+            if close <= 0:
+                return 0
+            return (close - avg_cost) * shares
+
+        def _get_realtime_info(symbol: str, rt_cache: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+            if symbol in rt_cache:
+                return rt_cache[symbol]
+            from backend.utils.symbol import strip_prefix
+            alt = strip_prefix(symbol)
+            if alt in rt_cache:
+                return rt_cache[alt]
+            return {"price": 0, "change_pct": 0, "name": ""}
+
+        def _batch_fetch_realtime(symbols: list) -> Dict[str, Dict[str, Any]]:
+            cache: Dict[str, Dict[str, Any]] = {}
+            if not symbols:
+                return cache
+            try:
+                from backend.routes.realtime import get_realtime
+                from backend.utils.symbol import strip_prefix
+                sym_str = ",".join(symbols)
+                result = get_realtime(sym_str)
+                if result.get("code") == 0 and result.get("data"):
+                    data = result["data"]
+                    for sym, item in data.items():
+                        cache[sym] = {
+                            "price": item.get("price", 0),
+                            "change_pct": item.get("change_pct", 0),
+                            "name": item.get("name", ""),
+                        }
+                        alt = strip_prefix(sym)
+                        if alt != sym:
+                            cache[alt] = cache[sym]
+            except Exception as e:
+                logger.warning(f"[Scheduler] 批量获取实时价格失败: {e}")
+            return cache
+
+        def _calc_composite(task_cfg: dict) -> Optional[Dict[str, Any]]:
             try:
                 df = cls._data_cache.get(task_cfg["symbol"]) if cls._data_cache else None
-                if df is None or len(df) == 0:
-                    df = gold_data.get_full_data(task_cfg["symbol"], datalen=5)
-                if df is not None and len(df) > 0:
-                    close = float(df["收盘"].iloc[-1])
-                    return (close - avg_cost) * shares
-            except Exception as e:
-                logger.warning(f"[Scheduler] 计算实时浮动盈亏失败: {e}")
-            return task_cfg.get("unrealized_pnl", 0) or 0
+                if df is None or len(df) < 20:
+                    df = gold_data.get_full_data(task_cfg["symbol"], datalen=90)
+                if df is None or len(df) < 20:
+                    return None
+                from backend.services.strategies.multi_factor import calc_composite_score
+                return calc_composite_score(df.iloc[-1], df)
+            except Exception:
+                return None
 
         if symbol:
             task_cfg = AutoTradeTask.find_by_symbol(user_id, symbol)
             if not task_cfg:
                 return None
+            rt_cache = _batch_fetch_realtime([symbol])
             task_enabled = task_cfg.get("enabled", False)
             running = scheduler_running and task_enabled
             logger.info(f"[Scheduler] task status: symbol={symbol}, enabled={task_enabled}, running={running}")
             signal = cls._calc_task_signal(task_cfg)
+            composite = _calc_composite(task_cfg)
+            rt = _get_realtime_info(symbol, rt_cache)
             return {
                 "id": task_cfg["id"],
                 "symbol": task_cfg["symbol"],
                 "running": running,
                 "task": task_cfg,
                 "signal": signal,
+                "composite_score": composite,
                 "task_cash": task_cfg.get("task_cash", task_cfg.get("allocated_funds", 0)),
                 "task_pnl": task_cfg.get("task_pnl", 0),
                 "task_position": {
@@ -577,7 +744,10 @@ class AutoTradeScheduler:
                     "avg_cost": task_cfg.get("position_avg_cost", 0),
                 },
                 "task_name": task_cfg.get("task_name", symbol),
-                "unrealized_pnl": _calc_unrealized(task_cfg),
+                "unrealized_pnl": _calc_unrealized(task_cfg, rt["price"]),
+                "realtime_price": rt["price"],
+                "price_change_pct": rt["change_pct"],
+                "stock_name": rt["name"],
                 "trade_count_today": task_cfg.get("trade_count_today", 0),
                 "last_trade_time": task_cfg.get("last_trade_time"),
                 "last_trade_direction": task_cfg.get("last_trade_direction"),
@@ -586,18 +756,23 @@ class AutoTradeScheduler:
             }
 
         tasks = AutoTradeTask.find_by_user(user_id)
+        all_symbols = list({t["symbol"] for t in tasks})
+        rt_cache = _batch_fetch_realtime(all_symbols)
         result = []
         for t in tasks:
             task_enabled = t.get("enabled", False)
             running = scheduler_running and task_enabled
             logger.info(f"[Scheduler] task status: symbol={t['symbol']}, enabled={task_enabled}, running={running}")
             signal = cls._calc_task_signal(t)
+            composite = _calc_composite(t)
+            rt = _get_realtime_info(t["symbol"], rt_cache)
             result.append({
                 "id": t["id"],
                 "symbol": t["symbol"],
                 "running": running,
                 "task": t,
                 "signal": signal,
+                "composite_score": composite,
                 "task_cash": t.get("task_cash", t.get("allocated_funds", 0)),
                 "task_pnl": t.get("task_pnl", 0),
                 "task_position": {
@@ -605,7 +780,10 @@ class AutoTradeScheduler:
                     "avg_cost": t.get("position_avg_cost", 0),
                 },
                 "task_name": t.get("task_name", t.get("symbol", "")),
-                "unrealized_pnl": _calc_unrealized(t),
+                "unrealized_pnl": _calc_unrealized(t, rt["price"]),
+                "realtime_price": rt["price"],
+                "price_change_pct": rt["change_pct"],
+                "stock_name": rt["name"],
                 "trade_count_today": t.get("trade_count_today", 0),
                 "last_trade_time": t.get("last_trade_time"),
                 "last_trade_direction": t.get("last_trade_direction"),
@@ -613,6 +791,123 @@ class AutoTradeScheduler:
                 "in_cooldown": AutoTradeTask.is_in_cooldown(t["id"]),
             })
         return result
+
+    @classmethod
+    def get_task_summary(cls, user_id: int) -> Dict[str, Any]:
+        """
+        计算所有自动交易任务的汇总数据，用于与共享账户对账。
+        
+        返回:
+        - total_allocated_funds: 所有任务分配资金总和
+        - total_task_cash: 所有任务剩余可用资金总和
+        - total_position_value: 所有任务持仓市值总和
+        - total_unrealized_pnl: 所有任务浮动盈亏总和
+        - positions_by_symbol: 按股票聚合的持仓数据
+        - account_comparison: 与共享账户的对比
+        """
+        tasks = AutoTradeTask.find_by_user(user_id)
+        if not tasks:
+            return {
+                "total_allocated_funds": 0,
+                "total_task_cash": 0,
+                "total_position_value": 0,
+                "total_unrealized_pnl": 0,
+                "positions_by_symbol": {},
+                "account_comparison": None,
+            }
+
+        all_symbols = list({t["symbol"] for t in tasks})
+        rt_cache: Dict[str, Dict[str, Any]] = {}
+        try:
+            from backend.routes.realtime import get_realtime
+            from backend.utils.symbol import strip_prefix
+            sym_str = ",".join(all_symbols)
+            result = get_realtime(sym_str)
+            if result.get("code") == 0 and result.get("data"):
+                data = result["data"]
+                for sym, item in data.items():
+                    rt_cache[sym] = {
+                        "price": item.get("price", 0),
+                        "change_pct": item.get("change_pct", 0),
+                        "name": item.get("name", ""),
+                    }
+                    alt = strip_prefix(sym)
+                    if alt != sym:
+                        rt_cache[alt] = rt_cache[sym]
+        except Exception as e:
+            logger.warning(f"[Scheduler] get_task_summary 获取实时价格失败: {e}")
+
+        total_allocated_funds = 0.0
+        total_task_cash = 0.0
+        total_position_value = 0.0
+        total_unrealized_pnl = 0.0
+        positions_by_symbol: Dict[str, Dict[str, Any]] = {}
+
+        for t in tasks:
+            allocated = float(t.get("allocated_funds", 0) or 0)
+            shares = int(t.get("position_shares", 0) or 0)
+            avg_cost = float(t.get("position_avg_cost", 0) or 0)
+            task_cash = float(t.get("task_cash", allocated) or allocated)
+
+            total_allocated_funds += allocated
+            total_task_cash += task_cash
+
+            symbol = t["symbol"]
+            rt = rt_cache.get(symbol, {})
+            price = float(rt.get("price", 0) or 0)
+            if price <= 0:
+                price = avg_cost
+
+            position_value = shares * price
+            unrealized = (price - avg_cost) * shares if shares > 0 and avg_cost > 0 else 0
+
+            total_position_value += position_value
+            total_unrealized_pnl += unrealized
+
+            if symbol not in positions_by_symbol:
+                positions_by_symbol[symbol] = {
+                    "symbol": symbol,
+                    "total_shares": 0,
+                    "total_value": 0.0,
+                    "tasks": [],
+                }
+            positions_by_symbol[symbol]["total_shares"] += shares
+            positions_by_symbol[symbol]["total_value"] += position_value
+            positions_by_symbol[symbol]["tasks"].append({
+                "id": t["id"],
+                "strategy": t.get("strategy", "grid"),
+                "shares": shares,
+                "avg_cost": avg_cost,
+                "task_cash": task_cash,
+                "unrealized_pnl": unrealized,
+            })
+
+        portfolio = st.get_portfolio(user_id)
+        account_comparison = None
+        if portfolio and portfolio.get("account"):
+            account = portfolio["account"]
+            account_comparison = {
+                "account_cash": float(account.get("cash", 0) or 0),
+                "account_market_value": float(account.get("market_value", 0) or 0),
+                "account_unrealized_pnl": float(account.get("unrealized_pnl", 0) or 0),
+                "account_realized_pnl": float(account.get("realized_pnl", 0) or 0),
+                "task_total_cash": round(total_task_cash, 2),
+                "task_total_position_value": round(total_position_value, 2),
+                "task_total_unrealized_pnl": round(total_unrealized_pnl, 2),
+                "cash_diff": round(float(account.get("cash", 0) or 0) - total_task_cash, 2),
+                "position_diff": round(float(account.get("market_value", 0) or 0) - total_position_value, 2),
+                "is_consistent": abs(float(account.get("cash", 0) or 0) - total_task_cash) < 1.0,
+            }
+
+        return {
+            "total_allocated_funds": round(total_allocated_funds, 2),
+            "total_task_cash": round(total_task_cash, 2),
+            "total_position_value": round(total_position_value, 2),
+            "total_unrealized_pnl": round(total_unrealized_pnl, 2),
+            "positions_by_symbol": positions_by_symbol,
+            "account_comparison": account_comparison,
+            "task_count": len(tasks),
+        }
 
     @classmethod
     def _calc_task_signal(cls, task_cfg: dict) -> Optional[Dict[str, Any]]:

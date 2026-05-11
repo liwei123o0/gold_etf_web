@@ -10,7 +10,7 @@ export const useSimulationStore = defineStore('simulation', () => {
   const portfolio = ref<SimulationPortfolio | null>(null)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
-  const realtimePrices = ref<Record<string, { price: number; name: string }>>({})
+  const realtimePrices = ref<Record<string, { price: number; name: string; change_pct: number; prev_close: number }>>({})
   const autoTradeTasks = ref<Record<number, TaskStatus>>({})
   const isAutoTrading = ref(false)
   const autoTradeError = ref<string | null>(null)
@@ -126,30 +126,12 @@ export const useSimulationStore = defineStore('simulation', () => {
     try {
       const result = await stockService.getRealtime(symbols.join(','))
       const data = result.data
-      const priceMap: Record<string, { price: number; name: string }> = {}
+      const priceMap: Record<string, { price: number; name: string; change_pct: number; prev_close: number }> = {}
       for (const [sym, d] of Object.entries(data)) {
-        priceMap[sym] = { price: d.price, name: d.name }
-        priceMap[stripPrefix(sym)] = { price: d.price, name: d.name }
+        priceMap[sym] = { price: d.price, name: d.name, change_pct: d.change_pct ?? 0, prev_close: d.prev_close ?? 0 }
+        priceMap[stripPrefix(sym)] = { price: d.price, name: d.name, change_pct: d.change_pct ?? 0, prev_close: d.prev_close ?? 0 }
       }
       realtimePrices.value = priceMap
-      
-      // Update positions current_price and account unrealized_pnl
-      if (portfolio.value) {
-        let unrealized = 0
-        for (const pos of portfolio.value.positions) {
-          const rt = priceMap[pos.symbol]
-          if (rt) {
-            pos.current_price = rt.price
-            pos.unrealized_pnl = (rt.price - pos.avg_cost) * pos.shares
-            pos.unrealized_pnl_pct = ((rt.price - pos.avg_cost) / pos.avg_cost) * 100
-          }
-          unrealized += pos.unrealized_pnl
-        }
-        portfolio.value.account.unrealized_pnl = unrealized
-        portfolio.value.account.total_pnl = portfolio.value.account.realized_pnl + unrealized
-        portfolio.value.account.market_value = portfolio.value.positions.reduce((sum, p) => sum + p.shares * p.current_price, 0)
-        portfolio.value.account.total_assets = portfolio.value.account.cash + portfolio.value.account.market_value
-      }
     } catch (e) {
       // silently fail for realtime updates
     }

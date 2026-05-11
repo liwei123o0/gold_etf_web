@@ -119,6 +119,8 @@ const addForm = ref({
   trend_ma_key: '',
   dynamic_interval: false,
   max_drawdown_pct: -15.0,
+  use_multi_factor: false,
+  adaptive_strategy: false,
   position_shares: 0,
   position_avg_cost: 0,
 })
@@ -139,6 +141,8 @@ const editForm = ref({
   trend_ma_key: '',
   dynamic_interval: false,
   max_drawdown_pct: -15.0,
+  use_multi_factor: false,
+  adaptive_strategy: false,
   position_shares: 0,
   position_avg_cost: 0,
 })
@@ -179,7 +183,7 @@ function openAddForm() {
     symbol: '', strategy: 'grid', grid_count: 10, base_ma_key: 'MA20',
     grid_spread: 0.10, position_size: 1.0, check_interval: 30, allocated_funds: 30000,
     stop_loss_pct: -5.0, take_profit_pct: 10.0, trend_ma_key: '', dynamic_interval: false,
-    max_drawdown_pct: -15.0,
+    max_drawdown_pct: -15.0, use_multi_factor: false, adaptive_strategy: false,
     position_shares: 0, position_avg_cost: 0,
   }
   addError.value = null
@@ -221,6 +225,8 @@ function openEditForm(taskId: number) {
     trend_ma_key: task.task.trend_ma_key ?? '',
     dynamic_interval: task.task.dynamic_interval ?? false,
     max_drawdown_pct: task.task.max_drawdown_pct ?? -15.0,
+    use_multi_factor: task.task.use_multi_factor ?? false,
+    adaptive_strategy: task.task.adaptive_strategy ?? false,
     position_shares: task.task_position?.shares ?? 0,
     position_avg_cost: task.task_position?.avg_cost ?? 0,
   }
@@ -265,23 +271,18 @@ async function handleStopAll() {
 }
 
 function getRealtimePrice(symbol: string) {
-  const rt = realtimePrices.value[symbol] || realtimePrices.value[stripPrefix(symbol)]
-  return rt ? rt.price : null
+  return null
 }
 
 function getRealtimeName(symbol: string): string {
-  const rt = realtimePrices.value[symbol] || realtimePrices.value[stripPrefix(symbol)]
-  return rt?.name || ''
+  return ''
 }
 
-function getPriceChange(symbol: string) {
+function getPriceChange(symbol: string, ts?: TaskStatus): number | null {
+  if (ts && ts.price_change_pct !== undefined) return ts.price_change_pct
   const rt = realtimePrices.value[symbol] || realtimePrices.value[stripPrefix(symbol)]
   if (!rt) return null
-  const task = autoTradeTasks.value[symbol]
-  const sig = task?.signal
-  if (!sig?.close) return null
-  const change = ((rt.price - sig.close) / sig.close * 100)
-  return change
+  return rt.change_pct
 }
 
 function strategyLabel(s: string) {
@@ -418,6 +419,20 @@ function strategyLabel(s: string) {
           <span class="unit">%（如-15=回撤15%暂停）</span>
         </div>
         <div class="form-item">
+          <label>多因子评分增强</label>
+          <label class="toggle-label">
+            <input v-model="addForm.use_multi_factor" type="checkbox" class="checkbox" />
+            <span class="toggle-text">{{ addForm.use_multi_factor ? '开启' : '关闭' }}</span>
+          </label>
+        </div>
+        <div class="form-item">
+          <label>自适应策略切换</label>
+          <label class="toggle-label">
+            <input v-model="addForm.adaptive_strategy" type="checkbox" class="checkbox" />
+            <span class="toggle-text">{{ addForm.adaptive_strategy ? '开启' : '关闭' }}</span>
+          </label>
+        </div>
+        <div class="form-item">
           <label>动态间隔</label>
           <label class="toggle-label">
             <input v-model="addForm.dynamic_interval" type="checkbox" class="checkbox" />
@@ -543,6 +558,20 @@ function strategyLabel(s: string) {
           <span class="unit">%（如-15=回撤15%暂停）</span>
         </div>
         <div class="form-item">
+          <label>多因子评分增强</label>
+          <label class="toggle-label">
+            <input v-model="editForm.use_multi_factor" type="checkbox" class="checkbox" />
+            <span class="toggle-text">{{ editForm.use_multi_factor ? '开启' : '关闭' }}</span>
+          </label>
+        </div>
+        <div class="form-item">
+          <label>自适应策略切换</label>
+          <label class="toggle-label">
+            <input v-model="editForm.adaptive_strategy" type="checkbox" class="checkbox" />
+            <span class="toggle-text">{{ editForm.adaptive_strategy ? '开启' : '关闭' }}</span>
+          </label>
+        </div>
+        <div class="form-item">
           <label>动态间隔</label>
           <label class="toggle-label">
             <input v-model="editForm.dynamic_interval" type="checkbox" class="checkbox" />
@@ -586,21 +615,23 @@ function strategyLabel(s: string) {
             <span class="drag-handle" title="拖拽排序">⋮⋮</span>
             <span class="running-indicator" :class="{ running: ts.running }"></span>
             <div class="task-symbol-info">
-              <span class="task-name">{{ getRealtimeName(ts.symbol) || ts.task_name || '' }}</span>
+              <span class="task-name">{{ ts.stock_name || ts.task_name || '' }}</span>
               <span class="task-symbol">{{ formatSymbolForDisplay(ts.symbol) }}</span>
             </div>
             <span class="task-strategy">{{ strategyLabel(ts.task.strategy) }}</span>
+            <span v-if="ts.task.adaptive_strategy" class="task-tag tag-adaptive">自适应</span>
+            <span v-if="ts.task.use_multi_factor" class="task-tag tag-multifactor">多因子</span>
             <span v-if="ts.task.trend_ma_key" class="task-tag">趋势过滤({{ ts.task.trend_ma_key }})</span>
             <span v-if="ts.task.dynamic_interval" class="task-tag">动态间隔</span>
           </div>
           <div class="task-header-right">
-            <div class="task-price" v-if="getRealtimePrice(ts.symbol) !== null">
-              <span class="price-value">{{ getRealtimePrice(ts.symbol)?.toFixed(3) }}</span>
+            <div class="task-price" v-if="ts.realtime_price > 0">
+              <span class="price-value">{{ ts.realtime_price.toFixed(3) }}</span>
               <span
                 class="price-change"
-                :style="{ color: (getPriceChange(ts.symbol) ?? 0) >= 0 ? '#ef5350' : '#26a69a' }"
+                :style="{ color: (getPriceChange(ts.symbol, ts) ?? 0) >= 0 ? '#ef5350' : '#26a69a' }"
               >
-                {{ (getPriceChange(ts.symbol) ?? 0) >= 0 ? '+' : '' }}{{ (getPriceChange(ts.symbol) ?? 0).toFixed(2) }}%
+                {{ (getPriceChange(ts.symbol, ts) ?? 0) >= 0 ? '+' : '' }}{{ (getPriceChange(ts.symbol, ts) ?? 0).toFixed(2) }}%
               </span>
             </div>
             <div class="task-signal" :style="{ color: signalColor(ts.signal?.signal ?? null) }">
@@ -672,6 +703,13 @@ function strategyLabel(s: string) {
               <span class="param-value" :style="{ color: (ts.task.consecutive_losses ?? 0) >= 3 ? '#ef5350' : '#ff9800' }">
                 {{ ts.task.consecutive_losses }}次
                 <span v-if="(ts.task.consecutive_losses ?? 0) >= 1" class="cooldown-tag">冷却延长</span>
+              </span>
+            </div>
+            <div v-if="ts.composite_score" class="param-item">
+              <span class="param-label">综合评分</span>
+              <span class="param-value" :style="{ color: ts.composite_score.score >= 20 ? '#ef5350' : ts.composite_score.score <= -20 ? '#26a69a' : '#ff9800' }">
+                {{ ts.composite_score.score.toFixed(0) }}分
+                <span class="market-state-tag">{{ ts.composite_score.market_state_cn }}</span>
               </span>
             </div>
           </div>
@@ -1066,4 +1104,7 @@ function strategyLabel(s: string) {
 .strategy-tag { background: rgba(149,117,205,0.15); color: #9575cd; }
 .task-tag { font-size: 11px; color: #42a5f5; background: rgba(33,150,243,0.1); padding: 1px 6px; border-radius: 3px; }
 .cooldown-tag { font-size: 10px; color: #ff9800; background: rgba(255,152,0,0.1); padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
+.market-state-tag { font-size: 10px; color: #42a5f5; background: rgba(33,150,243,0.1); padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
+.tag-adaptive { color: #ab47bc; background: rgba(171,71,188,0.1); }
+.tag-multifactor { color: #ff9800; background: rgba(255,152,0,0.1); }
 </style>

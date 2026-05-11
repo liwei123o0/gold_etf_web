@@ -10,6 +10,21 @@ const { positions } = storeToRefs(simStore)
 const posColor = (pnl: number) => pnl >= 0 ? '#ef5350' : '#26a69a'
 const posSign = (pnl: number) => pnl >= 0 ? '+' : ''
 
+const STRATEGY_LABELS: Record<string, string> = {
+  manual: '手动交易',
+  grid: '网格策略',
+  ma_trend: '均线趋势',
+}
+
+function getStrategyLabel(type: string): string {
+  return STRATEGY_LABELS[type] || type
+}
+
+function getStrategyClass(type: string): string {
+  if (type === 'manual') return 'manual'
+  return 'auto'
+}
+
 async function closePosition(symbol: string, shares: number, price: number, name: string) {
   await simStore.sell(symbol, name, price, shares)
 }
@@ -35,6 +50,7 @@ async function closePosition(symbol: string, shares: number, price: number, name
         <thead>
           <tr>
             <th>证券</th>
+            <th>策略类型</th>
             <th>持仓量</th>
             <th>成本价</th>
             <th>当前价</th>
@@ -50,10 +66,15 @@ async function closePosition(symbol: string, shares: number, price: number, name
               <div class="sym-name">{{ p.name }}</div>
               <div class="sym-code">{{ formatSymbolForDisplay(p.symbol) }}</div>
             </td>
+            <td>
+              <span class="strategy-badge" :class="getStrategyClass(p.strategy_type)">
+                {{ getStrategyLabel(p.strategy_type) }}
+              </span>
+            </td>
             <td>{{ p.shares }}</td>
             <td>{{ p.avg_cost.toFixed(3) }}</td>
             <td>{{ p.current_price.toFixed(3) }}</td>
-            <td>{{ (p.shares * p.current_price).toFixed(2) }}</td>
+            <td>{{ (p.market_value ?? p.shares * p.current_price).toFixed(2) }}</td>
             <td :style="{ color: posColor(p.unrealized_pnl) }">
               {{ posSign(p.unrealized_pnl) }}{{ p.unrealized_pnl.toFixed(2) }}
             </td>
@@ -168,6 +189,25 @@ async function closePosition(symbol: string, shares: number, price: number, name
 
   &:hover {
     background: rgba(38, 166, 154, 0.25);
+  }
+}
+
+.strategy-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: bold;
+  white-space: nowrap;
+
+  &.manual {
+    background: rgba(121, 134, 203, 0.15);
+    color: #7986cb;
+  }
+
+  &.auto {
+    background: rgba(0, 242, 255, 0.15);
+    color: var(--accent-cyan);
   }
 }
 </style>

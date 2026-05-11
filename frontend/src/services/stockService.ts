@@ -184,8 +184,10 @@ export interface SimulationPosition {
   shares: number
   avg_cost: number
   current_price: number
+  market_value: number
   unrealized_pnl: number
   unrealized_pnl_pct: number
+  strategy_type: string
 }
 
 export interface SimulationOrder {
@@ -201,10 +203,35 @@ export interface SimulationOrder {
   trade_type: string
 }
 
+export interface AutoTaskInfo {
+  id: number
+  symbol: string
+  task_name: string
+  strategy: string
+  shares: number
+  avg_cost: number
+  current_price: number
+  market_value: number
+  unrealized_pnl: number
+  realized_pnl: number
+  allocated_funds: number
+  task_cash: number
+  enabled: boolean
+}
+
+export interface AutoTasksSummary {
+  task_count: number
+  market_value: number
+  unrealized_pnl: number
+  realized_pnl: number
+  tasks: AutoTaskInfo[]
+}
+
 export interface SimulationPortfolio {
   account: SimulationAccount
   positions: SimulationPosition[]
   orders: SimulationOrder[]
+  auto_tasks: AutoTasksSummary
   total_return: number
   total_return_pct: number
 }
@@ -327,6 +354,11 @@ export const stockService = {
     return response.data
   },
 
+  async getAutoTradeSummary(): Promise<AutoTradeSummary> {
+    const response = await api.get<AutoTradeSummary>('/autotrade/summary')
+    return response.data
+  },
+
   async addAutoTradeTask(task: Partial<AutoTradeTask>): Promise<TaskStatus> {
     const response = await api.post<TaskStatus>('/autotrade/tasks', task)
     return response.data
@@ -392,6 +424,8 @@ export interface AutoTradeTask {
   max_drawdown_pct: number
   peak_value?: number
   consecutive_losses?: number
+  use_multi_factor: boolean
+  adaptive_strategy: boolean
 }
 
 export interface TaskStatus {
@@ -400,10 +434,56 @@ export interface TaskStatus {
   running: boolean
   task: AutoTradeTask
   signal: GridSignal | null
+  composite_score: CompositeScore | null
   task_cash: number
   task_pnl: number
   task_position: { shares: number; avg_cost: number }
   task_name: string
   unrealized_pnl: number
+  realtime_price: number
+  price_change_pct: number
+  stock_name: string
+}
+
+export interface CompositeScore {
+  score: number
+  market_state: string
+  market_state_cn: string
+  signal: string
+  position_suggestion: number
+  factors: Record<string, number>
+}
+
+export interface AutoTradeSummary {
+  total_allocated_funds: number
+  total_task_cash: number
+  total_position_value: number
+  total_unrealized_pnl: number
+  positions_by_symbol: Record<string, {
+    symbol: string
+    total_shares: number
+    total_value: number
+    tasks: Array<{
+      id: number
+      strategy: string
+      shares: number
+      avg_cost: number
+      task_cash: number
+      unrealized_pnl: number
+    }>
+  }>
+  account_comparison: {
+    account_cash: number
+    account_market_value: number
+    account_unrealized_pnl: number
+    account_realized_pnl: number
+    task_total_cash: number
+    task_total_position_value: number
+    task_total_unrealized_pnl: number
+    cash_diff: number
+    position_diff: number
+    is_consistent: boolean
+  } | null
+  task_count: number
 }
 

@@ -7,14 +7,27 @@ const simStore = useSimulationStore()
 const { portfolio } = storeToRefs(simStore)
 
 const account = computed(() => portfolio.value?.account ?? null)
+const autoTasks = computed(() => portfolio.value?.auto_tasks ?? null)
+
 const returnColor = computed(() => {
   if (!account.value) return '#7986cb'
-  return account.value.total_pnl >= 0 ? '#ef5350' : '#26a69a'
+  return totalPnl.value >= 0 ? '#ef5350' : '#26a69a'
 })
 const returnSign = computed(() => {
   if (!account.value) return ''
-  return account.value.total_pnl >= 0 ? '+' : ''
+  return totalPnl.value >= 0 ? '+' : ''
 })
+
+const totalUnrealizedPnl = computed(() => account.value?.unrealized_pnl ?? 0)
+const totalMarketValue = computed(() => account.value?.market_value ?? 0)
+const totalRealizedPnl = computed(() => account.value?.realized_pnl ?? 0)
+const totalAssets = computed(() => account.value?.total_assets ?? 0)
+const totalPnl = computed(() => account.value?.total_pnl ?? 0)
+
+const unrealizedColor = computed(() => totalUnrealizedPnl.value >= 0 ? '#ef5350' : '#26a69a')
+const realizedColor = computed(() => totalRealizedPnl.value >= 0 ? '#ef5350' : '#26a69a')
+
+const autoTaskCount = computed(() => autoTasks.value?.task_count ?? 0)
 
 // 初始资金设置
 const showResetForm = ref(false)
@@ -41,12 +54,12 @@ async function handleReset() {
     </div>
     <div class="stat-card">
       <span class="stat-label">当前权益</span>
-      <span class="stat-value">{{ account ? (account.total_assets / 10000).toFixed(2) : '--' }}万</span>
+      <span class="stat-value">{{ account ? (totalAssets / 10000).toFixed(2) : '--' }}万</span>
     </div>
     <div class="stat-card">
       <span class="stat-label">总盈亏</span>
       <span class="stat-value" :style="{ color: returnColor }">
-        {{ returnSign }}{{ account ? (account.total_pnl).toFixed(2) : '--' }}元
+        {{ returnSign }}{{ totalPnl.toFixed(2) }}元
       </span>
     </div>
     <div class="stat-card">
@@ -55,23 +68,23 @@ async function handleReset() {
     </div>
     <div class="stat-card">
       <span class="stat-label">持仓市值</span>
-      <span class="stat-value">{{ account ? account.market_value.toFixed(2) : '--' }}</span>
+      <span class="stat-value">{{ totalMarketValue.toFixed(2) }}</span>
     </div>
     <div class="stat-card">
       <span class="stat-label">浮动盈亏</span>
-      <span class="stat-value" :style="{ color: account && account.unrealized_pnl >= 0 ? '#ef5350' : '#26a69a' }">
-        {{ account ? (account.unrealized_pnl >= 0 ? '+' : '') + account.unrealized_pnl.toFixed(2) : '--' }}
+      <span class="stat-value" :style="{ color: unrealizedColor }">
+        {{ totalUnrealizedPnl >= 0 ? '+' : '' }}{{ totalUnrealizedPnl.toFixed(2) }}
       </span>
     </div>
     <div class="stat-card">
       <span class="stat-label">已实现盈亏</span>
-      <span class="stat-value" :style="{ color: account && account.realized_pnl >= 0 ? '#ef5350' : '#26a69a' }">
-        {{ account ? (account.realized_pnl >= 0 ? '+' : '') + account.realized_pnl.toFixed(2) : '--' }}
+      <span class="stat-value" :style="{ color: realizedColor }">
+        {{ totalRealizedPnl >= 0 ? '+' : '' }}{{ totalRealizedPnl.toFixed(2) }}
       </span>
     </div>
     <div class="stat-card">
       <span class="stat-label">持仓笔数</span>
-      <span class="stat-value">{{ portfolio?.positions?.length ?? 0 }}</span>
+      <span class="stat-value">{{ portfolio?.positions?.length ?? 0 }} / {{ autoTaskCount }}任务</span>
     </div>
 
     <!-- 重置资金 -->

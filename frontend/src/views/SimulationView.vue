@@ -8,11 +8,10 @@ import SimulationOrderHistory from '@/components/simulation/SimulationOrderHisto
 import AutoTradePanel from '@/components/simulation/AutoTradePanel.vue'
 import { useSimulationStore } from '@/stores/simulation'
 import { useGlobalSettings } from '@/composables/useGlobalSettings'
-import { stripPrefix } from '@/utils/symbol'
 import { storeToRefs } from 'pinia'
 
 const simStore = useSimulationStore()
-const { orders, portfolio } = storeToRefs(simStore)
+const { portfolio, orders } = storeToRefs(simStore)
 const { settings: globalSettings } = useGlobalSettings()
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -24,26 +23,13 @@ onMounted(async () => {
   }
   await simStore.fetchAutoTradeTasks()
 
-  const pollRealtime = async () => {
-    const pos = simStore.positions
-    const symbols: string[] = pos.map((p: any) => stripPrefix(p.symbol))
-    const currentSymbol = stripPrefix(simStore.currentSymbol)
-    if (currentSymbol && !symbols.includes(currentSymbol)) {
-      symbols.push(currentSymbol)
-    }
-    for (const ts of Object.values(simStore.autoTradeTasks)) {
-      const sym = stripPrefix(ts.symbol)
-      if (!symbols.includes(sym)) {
-        symbols.push(sym)
-      }
-    }
-    if (symbols.length > 0) {
-      await simStore.updateRealtime(symbols)
-    }
+  const pollRefresh = async () => {
+    await simStore.loadPortfolio()
+    await simStore.fetchAutoTradeTasks()
   }
 
-  pollRealtime()
-  pollTimer = setInterval(pollRealtime, globalSettings.value.simRealtimeInterval)
+  pollRefresh()
+  pollTimer = setInterval(pollRefresh, globalSettings.value.simRealtimeInterval)
 })
 
 onUnmounted(() => {
