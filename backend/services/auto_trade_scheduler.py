@@ -298,8 +298,8 @@ class AutoTradeScheduler:
         morning = 9 * 60 + 30 <= hour_minute <= 11 * 60 + 30
         # 下午 13:00-15:00 (780-900分钟)
         afternoon = 13 * 60 <= hour_minute <= 15 * 60
-        
-        return morning or afternoon
+        return  True
+        # return morning or afternoon
 
     @classmethod
     def _get_sim_position(cls, user_id: int, symbol: str, strategy: str = None, portfolio: dict = None) -> dict:
@@ -586,6 +586,46 @@ class AutoTradeScheduler:
             AutoTradeTask.update_consecutive_losses(task_cfg["id"], is_loss)
 
             logger.info(f"[AutoTradeScheduler] {user_id}/{symbol} {action_str} {shares}股 @ {close:.4f}, 建议仓位={delta['effective_ratio']:.2%}, 当前仓位={delta['current_position_ratio']:.2%}, 偏差={value_diff:.2f}")
+            
+            # 发送邮件通知
+            try:
+                from backend.utils.notification import send_trade_email
+                import os
+                
+                logger.info(f"[Email] 准备发送交易通知: user_id={user_id}, symbol={symbol}, action={action_str}")
+                
+                notify_emails = os.getenv('EMAIL_NOTIFY_RECEIVERS', '')
+                logger.debug(f"[Email] EMAIL_NOTIFY_RECEIVERS 配置: {notify_emails if notify_emails else '(未设置)'}")
+                
+                if notify_emails:
+                    email_list = [email.strip() for email in notify_emails.split(',') if email.strip()]
+                    logger.info(f"[Email] 解析收件人列表: {email_list}")
+                    
+                    if email_list:
+                        logger.info(f"[Email] 开始发送邮件通知...")
+                        result = send_trade_email(
+                            to_emails=email_list,
+                            user_id=user_id,
+                            symbol=symbol,
+                            action=action_str,
+                            shares=shares,
+                            price=close,
+                            strategy=strategy,
+                            task_name=trade_name
+                        )
+                        
+                        if result:
+                            logger.info(f"[Email] ✅ 交易通知邮件发送成功: {action_str} {symbol}")
+                        else:
+                            logger.warning(f"[Email] ⚠️ 交易通知邮件发送失败（返回 False）: {action_str} {symbol}")
+                    else:
+                        logger.warning(f"[Email] ⚠️ 收件人列表为空，跳过邮件发送")
+                else:
+                    logger.info(f"[Email] ℹ️ 未配置 EMAIL_NOTIFY_RECEIVERS，跳过邮件发送")
+                    
+            except Exception as e:
+                logger.error(f"[Email] ❌ 发送交易通知邮件异常: {type(e).__name__}: {e}", exc_info=True)
+            
             return {"action": action_str, "shares": shares, "close": close}
 
         return None
@@ -772,6 +812,49 @@ class AutoTradeScheduler:
             is_loss = close < (task_cfg.get("position_avg_cost", 0) or 0)
             AutoTradeTask.update_consecutive_losses(task_cfg["id"], is_loss)
             logger.warning(f"[{close_type.upper()}] {user_id}/{symbol} 已清仓 {shares}股 @ {close:.4f}, 原因={reason}")
+            
+            # 发送止损/止盈邮件通知
+            try:
+                from backend.utils.notification import send_trade_email
+                import os
+                
+                logger.info(f"[Email] 准备发送{close_type}通知: user_id={user_id}, symbol={symbol}, reason={reason}")
+                
+                notify_emails = os.getenv('EMAIL_NOTIFY_RECEIVERS', '')
+                logger.debug(f"[Email] EMAIL_NOTIFY_RECEIVERS 配置: {notify_emails if notify_emails else '(未设置)'}")
+                
+                if notify_emails:
+                    email_list = [email.strip() for email in notify_emails.split(',') if email.strip()]
+                    logger.info(f"[Email] 解析收件人列表: {email_list}")
+                    
+                    if email_list:
+                        strategy = task_cfg.get("strategy", "grid")
+                        trade_name = task_cfg.get("task_name", symbol)
+                        
+                        logger.info(f"[Email] 开始发送{close_type}通知邮件...")
+                        result = send_trade_email(
+                            to_emails=email_list,
+                            user_id=user_id,
+                            symbol=symbol,
+                            action="卖出",
+                            shares=shares,
+                            price=close,
+                            strategy=strategy,
+                            task_name=trade_name,
+                            reason=reason
+                        )
+                        
+                        if result:
+                            logger.info(f"[Email] ✅ {close_type}通知邮件发送成功: {symbol}")
+                        else:
+                            logger.warning(f"[Email] ⚠️ {close_type}通知邮件发送失败（返回 False）: {symbol}")
+                    else:
+                        logger.warning(f"[Email] ⚠️ 收件人列表为空，跳过邮件发送")
+                else:
+                    logger.info(f"[Email] ℹ️ 未配置 EMAIL_NOTIFY_RECEIVERS，跳过邮件发送")
+                    
+            except Exception as e:
+                logger.error(f"[Email] ❌ 发送{close_type}通知邮件异常: {type(e).__name__}: {e}", exc_info=True)
         else:
             logger.error(f"[{close_type.upper()}] {user_id}/{symbol} 清仓失败: {result.get('error', '')}")
 

@@ -1,7 +1,7 @@
 """
 FastAPI 应用主入口
 
-黄金ETF技术分析系统后端 API 服务。
+股票模拟交易系统后端 API 服务。
 提供K线数据、技术指标、网格交易信号、模拟回测、自动交易等功能。
 """
 
@@ -19,7 +19,62 @@ from pydantic import BaseModel
 from backend.services.auto_trade_scheduler import AutoTradeScheduler
 
 # 将项目根目录添加到 Python 模块搜索路径，确保 backend 包可被正确导入
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+# ==================== 加载 .env 文件 ====================
+
+def load_env_file():
+    """
+    手动加载 .env 文件到环境变量
+
+    支持格式：
+    - KEY=VALUE
+    - KEY="VALUE"
+    - KEY='VALUE'
+    - 注释行以 # 开头
+    """
+    env_path = os.path.join(project_root, '.env')
+    if not os.path.exists(env_path):
+        print(f"⚠️  未找到配置文件: {env_path}")
+        return
+
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # 跳过空行和注释
+                if not line or line.startswith('#'):
+                    continue
+                # 解析 KEY=VALUE
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    # 移除引号
+                    if value and len(value) >= 2:
+                        if (value[0] == '"' and value[-1] == '"') or \
+                           (value[0] == "'" and value[-1] == "'"):
+                            value = value[1:-1]
+                    os.environ[key] = value
+
+        print(f"✅ 已加载配置文件: {env_path}")
+
+        # 验证邮件配置
+        if os.getenv('EMAIL_SMTP_SERVER'):
+            print(f"   - EMAIL_SMTP_SERVER: {os.getenv('EMAIL_SMTP_SERVER')}")
+            print(f"   - EMAIL_SMTP_PORT: {os.getenv('EMAIL_SMTP_PORT')}")
+            print(f"   - EMAIL_SENDER: {os.getenv('EMAIL_SENDER')}")
+            print(f"   - EMAIL_USE_TLS: {os.getenv('EMAIL_USE_TLS')}")
+            if os.getenv('EMAIL_NOTIFY_RECEIVERS'):
+                print(f"   - EMAIL_NOTIFY_RECEIVERS: {os.getenv('EMAIL_NOTIFY_RECEIVERS')}")
+            print()
+
+    except Exception as e:
+        print(f"❌ 加载配置文件失败: {e}")
+
+# 在应用启动前加载环境变量
+load_env_file()
 
 
 # ==================== 日志配置 ====================
@@ -135,7 +190,7 @@ async def lifespan(app: FastAPI):
     enabled_tasks = AutoTradeTask.find_all_enabled()
 
     logger.info("=" * 50)
-    logger.info("黄金ETF技术分析系统 API v2.0 (SQLAlchemy ORM)")
+    logger.info("股票模拟自动交易系统 API v2.0 (SQLAlchemy ORM)")
     logger.info("后端启动成功!")
     logger.info("=" * 50)
 
