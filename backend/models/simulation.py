@@ -207,14 +207,8 @@ class SimulationPosition:
         current_price = float(row.current_price)
         market_value = shares * current_price
 
-        db_unrealized = float(row.unrealized_pnl) if row.unrealized_pnl is not None else 0
-        db_unrealized_pct = float(row.unrealized_pnl_pct) if row.unrealized_pnl_pct is not None else 0
-
-        calc_unrealized = (current_price - avg_cost) * shares if shares > 0 else 0
-        calc_unrealized_pct = ((current_price - avg_cost) / avg_cost * 100) if (shares > 0 and avg_cost > 0) else 0
-
-        unrealized = calc_unrealized if abs(db_unrealized) < 0.01 and abs(calc_unrealized) >= 0.01 else db_unrealized
-        unrealized_pct = calc_unrealized_pct if abs(db_unrealized_pct) < 0.01 and abs(calc_unrealized_pct) >= 0.01 else db_unrealized_pct
+        unrealized = (current_price - avg_cost) * shares if shares > 0 else 0
+        unrealized_pct = ((current_price - avg_cost) / avg_cost * 100) if (shares > 0 and avg_cost > 0) else 0
 
         return {
             "symbol": row.symbol,

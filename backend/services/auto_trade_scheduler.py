@@ -25,6 +25,12 @@ DEFAULT_CHECK_INTERVAL = 30
 CONSECUTIVE_SIGNALS_REQUIRED = 2   # 交易信号需连续 N 次相同才执行
 MIN_STEP_VALUE_PCT = 0.02          # 最小调仓阈值：分配资金的 2%
 
+# A股交易规则常量
+MIN_TRADE_UNITS = 100              # 最小交易单位（股）
+POSITION_MATCH_TOLERANCE = 0.03    # 仓位匹配容差（3%）
+MAX_PRICE_DEVIATION_PCT = 5.0      # 最大价格偏离百分比
+CACHE_TTL = 60                     # 数据缓存有效期（秒）
+
 STRATEGY_TYPE_MAP = {
     "grid": "网格策略",
     "ma_trend": "均线趋势",
@@ -147,7 +153,7 @@ class AutoTradeScheduler:
                     for sym, item in rt_result["data"].items():
                         if item and item.get("price"):
                             realtime_map[sym] = item
-                            alt = sym.replace("sh", "").replace("sz", "")
+                            alt = sym.replace("sh", "").replace("sz", "").replace("bj", "")
                             if alt != sym:
                                 realtime_map[alt] = item
                 if realtime_map:
@@ -271,19 +277,29 @@ class AutoTradeScheduler:
 
     @classmethod
     def _is_trading_time(cls) -> bool:
+        """
+        判断当前是否为交易时间
+        
+        Returns:
+            bool: True 为交易时间，False 为非交易时间
+        """
         from backend.utils.timezone import get_china_now
         from backend.services.gold_data import is_trade_date
         now = get_china_now()
 
+        # 首先检查是否为交易日
         if not is_trade_date(now.date()):
             return False
 
-        hour, minute = now.hour, now.minute
-        if (hour == 9 and minute >= 30) or (9 < hour < 11) or (hour == 11 and minute <= 30):
-            return True
-        if (hour == 13) or (hour == 14) or (hour == 15 and minute == 0):
-            return True
-        return False
+        # 转换为分钟数便于比较（小时*60 + 分钟）
+        hour_minute = now.hour * 60 + now.minute
+        
+        # 上午 9:30-11:30 (570-690分钟)
+        morning = 9 * 60 + 30 <= hour_minute <= 11 * 60 + 30
+        # 下午 13:00-15:00 (780-900分钟)
+        afternoon = 13 * 60 <= hour_minute <= 15 * 60
+        
+        return morning or afternoon
 
     @classmethod
     def _get_sim_position(cls, user_id: int, symbol: str, strategy: str = None, portfolio: dict = None) -> dict:
@@ -462,6 +478,12 @@ class AutoTradeScheduler:
         cur_avg_cost = sim_pos["avg_cost"]
         task_cash = cls._calc_task_cash(allocated_funds, cur_shares, cur_avg_cost)
 
+        current_market_value = cur_shares * close
+        current_position_ratio = current_market_value / allocated_funds if allocated_funds > 0 else 0
+        if abs(current_position_ratio - delta["effective_ratio"]) < POSITION_MATCH_TOLERANCE:
+            logger.debug(f"[ExecuteGuard] {user_id}/{symbol} 执行前仓位已匹配 {current_position_ratio:.2%} ≈ {delta['effective_ratio']:.2%}，跳过")
+            return None
+
         strategy = task_cfg.get("strategy", "grid")
         specific_trade_type = _build_trade_type(strategy)
         strategy_type = strategy if strategy != "manual" else "manual"
@@ -470,8 +492,8 @@ class AutoTradeScheduler:
             if close <= 0:
                 logger.warning(f"[CashGuard] {user_id}/{symbol} 价格无效 close={close}")
                 return None
-            shares = int(round(value_diff / close / 100)) * 100
-            if shares < 100:
+            shares = int(round(value_diff / close / MIN_TRADE_UNITS)) * MIN_TRADE_UNITS
+            if shares < MIN_TRADE_UNITS:
                 return None
             amount = close * shares
             commission_est = max(amount * commission_rate, min_commission)
@@ -481,8 +503,8 @@ class AutoTradeScheduler:
                     logger.warning(
                         f"[CashGuard] {user_id}/{symbol} 任务现金不足以支付最低佣金 task_cash={task_cash:.2f}")
                     return None
-                max_shares = int(max_affordable_amount / close / 100) * 100
-                if max_shares < 100:
+                max_shares = int(max_affordable_amount / close / MIN_TRADE_UNITS) * MIN_TRADE_UNITS
+                if max_shares < MIN_TRADE_UNITS:
                     logger.warning(
                         f"[CashGuard] {user_id}/{symbol} 任务现金不足 task_cash={task_cash:.2f} < need={amount + commission_est:.2f}")
                     return None
@@ -496,12 +518,12 @@ class AutoTradeScheduler:
             action_str = "买入"
         else:
             sell_amount = abs(value_diff)
-            shares = int(round(sell_amount / close / 100)) * 100
-            if shares < 100 or cur_shares < 100:
+            shares = int(round(sell_amount / close / MIN_TRADE_UNITS)) * MIN_TRADE_UNITS
+            if shares < MIN_TRADE_UNITS or cur_shares < MIN_TRADE_UNITS:
                 return None
             shares = min(shares, cur_shares)
-            shares = (shares // 100) * 100
-            if shares < 100:
+            shares = (shares // MIN_TRADE_UNITS) * MIN_TRADE_UNITS
+            if shares < MIN_TRADE_UNITS:
                 return None
             result = st.execute_trade(user_id, "sell", symbol, trade_name, close, shares, trade_type=specific_trade_type, strategy_type=strategy_type)
             action_str = "卖出"
@@ -525,12 +547,19 @@ class AutoTradeScheduler:
             sim_shares = int(sim_pos.get("shares", 0)) if sim_pos else 0
             sim_avg_cost = float(sim_pos.get("avg_cost", 0)) if sim_pos else 0
 
+            # 以任务计算值为准，强制同步到数据库
             if sim_shares > 0 and abs(sim_avg_cost - new_avg_cost) > 0.001:
                 logger.warning(
                     f"[CostSync] {user_id}/{symbol}[{strategy_type}] 持仓成本不一致: "
                     f"任务计算={new_avg_cost:.4f} (基于{old_shares}股@{old_avg_cost:.4f}+{shares}股@{close:.4f}), "
                     f"模拟账户={sim_avg_cost:.4f} ({sim_shares}股), "
-                    f"差异={abs(sim_avg_cost - new_avg_cost):.4f}, 以任务计算值为准"
+                    f"差异={abs(sim_avg_cost - new_avg_cost):.4f}, 强制修正"
+                )
+                # 强制更新数据库中的持仓成本
+                SimulationPosition.upsert(
+                    user_id, symbol, trade_name,
+                    new_shares, new_avg_cost,
+                    close, strategy_type
                 )
 
             if sim_shares != new_shares:
@@ -566,6 +595,13 @@ class AutoTradeScheduler:
         user_id = task_cfg["user_id"]
         symbol = task_cfg["symbol"]
 
+        # 检查数据缓存是否过期
+        import time as _time
+        if cls._data_cache_ts and (_time.time() - cls._data_cache_ts) > CACHE_TTL:
+            logger.warning(f"[Cache] {user_id}/{symbol} 数据已过期 ({_time.time() - cls._data_cache_ts:.0f}s)，重新获取")
+            cls._data_cache = {}
+            cls._data_cache_ts = 0
+
         if data_cache and symbol in data_cache:
             df = data_cache[symbol]
         else:
@@ -577,26 +613,29 @@ class AutoTradeScheduler:
         kline_close = float(latest["收盘"])
         allocated_funds = task_cfg.get("allocated_funds", 0)
 
+        realtime_price = None
         try:
             rt = get_realtime(symbol)
             logger.debug(f"[Realtime] {user_id}/{symbol} 实时行情响应: code={rt.get('code')}, has_data={bool(rt.get('data'))}")
             if rt.get("code") == 0 and rt.get("data"):
                 data = rt["data"]
                 symbol_data = data.get(symbol) or data.get(normalize_symbol(symbol)) or {}
-                if symbol_data and symbol_data.get("price"):
-                    realtime_price = float(symbol_data.get("price", 0))
+                if symbol_data and symbol_data.get("price") and float(symbol_data["price"]) > 0:
+                    realtime_price = float(symbol_data["price"])
                     logger.info(f"[Realtime] {user_id}/{symbol} 获取实时价格成功: {realtime_price:.4f}")
-                else:
-                    logger.warning(f"[Realtime] {user_id}/{symbol} 实时行情无价格数据, symbol_data={symbol_data}")
-                    realtime_price = kline_close
-            else:
-                logger.warning(f"[Realtime] {user_id}/{symbol} 实时行情获取失败: {rt.get('msg', rt.get('error', '未知错误'))}")
-                realtime_price = kline_close
         except Exception as e:
-            logger.warning(f"[Realtime] {user_id}/{symbol} 获取实时价格异常: {e}, 使用K线收盘价")
-            realtime_price = kline_close
+            logger.error(f"[Realtime] {user_id}/{symbol} 获取实时价格异常: {e}")
 
-        close = realtime_price
+        if realtime_price and realtime_price > 0:
+            close = realtime_price
+        else:
+            logger.warning(f"[Realtime] {user_id}/{symbol} 实时价格不可用，使用K线收盘价 {kline_close:.4f} 更新持仓（不交易）")
+            st.update_position_price(user_id, symbol, kline_close)
+            AutoTradeTask.update_last_check(task_cfg["id"], "观望")
+            return
+
+        st.update_position_price(user_id, symbol, close)
+        logger.debug(f"[PriceUpdate] {user_id}/{symbol} 巡检更新持仓价格: {close:.4f}")
 
         portfolio = st.get_portfolio(user_id)
         account_cash = float(portfolio["account"].get("cash", 0)) if portfolio and portfolio.get("account") else 0
@@ -705,11 +744,11 @@ class AutoTradeScheduler:
 
     @classmethod
     async def _force_close_position(cls, user_id, symbol, close, shares, task_cfg, reason, close_type):
-        if shares < 100:
+        if shares < MIN_TRADE_UNITS:
             return
 
-        shares = (shares // 100) * 100
-        if shares < 100:
+        shares = (shares // MIN_TRADE_UNITS) * MIN_TRADE_UNITS
+        if shares < MIN_TRADE_UNITS:
             return
 
         trade_name = task_cfg.get("task_name", symbol)

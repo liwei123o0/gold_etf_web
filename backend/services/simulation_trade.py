@@ -11,6 +11,8 @@ import uuid
 import logging
 from datetime import datetime
 from typing import Dict
+
+from backend.models.db import get_session
 from backend.models.simulation import (
     SimulationAccount,
     SimulationPosition,
@@ -426,16 +428,26 @@ def delete_position(user_id, symbol, strategy=None):
     if not portfolio:
         return {"success": False, "error": "账户不存在"}
     
-    with get_session() as session:
-        query = session.query(SimPosition).filter(
-            SimPosition.user_id == user_id,
-            SimPosition.symbol == symbol
-        )
-        if strategy:
-            query = query.filter(SimPosition.strategy_type == strategy)
-        query.delete()
+    try:
+        with get_session() as session:
+            query = session.query(SimPosition).filter(
+                SimPosition.user_id == user_id,
+                SimPosition.symbol == symbol
+            )
+            if strategy:
+                query = query.filter(SimPosition.strategy_type == strategy)
+            deleted_count = query.delete()
+            session.commit()
+            
+            if deleted_count == 0:
+                logger.warning(f"[DeletePosition] user_id={user_id} symbol={symbol} strategy={strategy} 持仓不存在")
+                return {"success": False, "error": "持仓不存在"}
+            
+            logger.info(f"[DeletePosition] user_id={user_id} symbol={symbol} strategy={strategy} 成功删除 {deleted_count} 条持仓记录")
+    except Exception as e:
+        logger.error(f"[DeletePosition] user_id={user_id} symbol={symbol} strategy={strategy} 删除失败: {e}")
+        return {"success": False, "error": f"删除持仓失败: {str(e)}"}
     
-    logger.info(f"[DeletePosition] user_id={user_id} symbol={symbol} strategy={strategy}")
     return {"success": True, "portfolio": get_portfolio(user_id)}
 
 
@@ -468,6 +480,7 @@ def update_prices(user_id, realtime_map):
     更新持仓的当前价格
     
     根据实时行情数据更新所有持仓的当前价格，并重新计算浮动盈亏。
+    使用 strip_prefix 和 normalize_symbol 确保符号格式匹配。
     
     Args:
         user_id: 用户ID
@@ -476,11 +489,13 @@ def update_prices(user_id, realtime_map):
     Returns:
         dict: 更新后的账户信息，如果账户不存在则返回 None
     """
+    from backend.utils.symbol import strip_prefix, normalize_symbol
     portfolio = get_portfolio(user_id)
     if not portfolio:
         return None
     for pos in portfolio["positions"]:
-        rt = realtime_map.get(pos["symbol"])
+        sym = pos["symbol"]
+        rt = realtime_map.get(sym) or realtime_map.get(strip_prefix(sym)) or realtime_map.get(normalize_symbol(sym))
         if rt:
             SimulationPosition.upsert(user_id, pos["symbol"], pos["name"], pos["shares"], pos["avg_cost"], rt["price"], pos.get("strategy_type", "manual"))
     return get_portfolio(user_id)

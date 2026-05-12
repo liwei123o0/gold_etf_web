@@ -16,6 +16,8 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 from pydantic import BaseModel
 
+from backend.services.auto_trade_scheduler import AutoTradeScheduler
+
 # 将项目根目录添加到 Python 模块搜索路径，确保 backend 包可被正确导入
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
