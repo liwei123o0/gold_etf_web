@@ -290,6 +290,8 @@ def execute_trade(user_id, direction, symbol, name, price, shares, trade_type="m
     根据交易方向执行买入或卖出操作，更新账户资金、持仓和订单记录。
     买入时扣除资金并增加持仓，卖出时减少持仓并增加资金。
     
+    持仓按策略类型隔离，同一股票不同策略有独立的持仓记录。
+    
     Args:
         user_id: 用户ID
         direction: 交易方向，"buy" 或 "sell"
@@ -298,7 +300,7 @@ def execute_trade(user_id, direction, symbol, name, price, shares, trade_type="m
         price: 成交价格
         shares: 成交数量（必须是100的整数倍）
         trade_type: 交易类型，用于标识订单来源
-        strategy_type: 策略类型，用于标识持仓来源
+        strategy_type: 策略类型，用于标识持仓来源和隔离
         
     Returns:
         dict: 包含以下字段的交易结果
@@ -315,18 +317,15 @@ def execute_trade(user_id, direction, symbol, name, price, shares, trade_type="m
     settings = SimSettings.get(symbol)
     amount = price * shares
 
-    # 根据交易金额计算手续费
     commission = max(amount * settings["commission_rate"], settings["min_commission"])
 
     if direction == "buy":
-        # 买入逻辑
         total_cost = amount + commission
         if account["cash"] < total_cost:
             return {"success": False, "error": f"资金不足，需要 {total_cost:.2f}，可用 {account['cash']:.2f}"}
 
-        # 查找是否已有持仓，计算新的平均成本
-        pos = next((p for p in portfolio["positions"] if p["symbol"] == symbol), None)
-        if pos:
+        pos = SimulationPosition.find_by_strategy(user_id, symbol, strategy_type)
+        if pos and pos.get("shares", 0) > 0:
             total_cost_shares = pos["shares"] * pos["avg_cost"] + amount
             new_shares = pos["shares"] + shares
             new_avg_cost = total_cost_shares / new_shares
@@ -334,7 +333,6 @@ def execute_trade(user_id, direction, symbol, name, price, shares, trade_type="m
             new_shares = shares
             new_avg_cost = price
 
-        # 更新账户资金和持仓
         new_cash = account["cash"] - total_cost
         SimulationAccount.upsert(user_id, account["initial_capital"], new_cash, 0.0, account["realized_pnl"])
         SimulationPosition.upsert(user_id, symbol, name, new_shares, new_avg_cost, price, strategy_type)
@@ -342,24 +340,21 @@ def execute_trade(user_id, direction, symbol, name, price, shares, trade_type="m
         return {"success": True, "order": order, "portfolio": get_portfolio(user_id)}
 
     elif direction == "sell":
-        # 卖出逻辑
-        pos = next((p for p in portfolio["positions"] if p["symbol"] == symbol), None)
-        if not pos or pos["shares"] < shares:
-            return {"success": False, "error": "持仓不足"}
+        pos = SimulationPosition.find_by_strategy(user_id, symbol, strategy_type)
+        if not pos or pos.get("shares", 0) < shares:
+            available = pos.get("shares", 0) if pos else 0
+            return {"success": False, "error": f"策略[{strategy_type}]持仓不足，需要{shares}股，可用{available}股"}
 
-        # 计算卖出费用（手续费 + 印花税 + 过户费）
-        stamp_tax = amount * settings["stamp_tax_rate"]  # 仅卖方支付印花税
-        transfer_fee = amount * settings["transfer_fee_rate"] if symbol.startswith("sh") else 0  # 仅沪市收过户费
+        stamp_tax = amount * settings["stamp_tax_rate"]
+        transfer_fee = amount * settings["transfer_fee_rate"] if symbol.startswith("sh") else 0
         total_fees = commission + stamp_tax + transfer_fee
         net_amount = amount - total_fees
 
-        # 计算已实现盈亏
         realized_pnl = (price - pos["avg_cost"]) * shares - total_fees
         new_cash = account["cash"] + net_amount
         new_realized_pnl = account["realized_pnl"] + realized_pnl
         SimulationAccount.upsert(user_id, account["initial_capital"], new_cash, 0.0, new_realized_pnl)
 
-        # 更新持仓
         new_shares = pos["shares"] - shares
         SimulationPosition.upsert(user_id, symbol, name, new_shares, pos["avg_cost"], price, strategy_type)
 
@@ -437,9 +432,10 @@ def update_prices(user_id, realtime_map):
 
 def update_position_price(user_id, symbol, current_price):
     """
-    更新指定股票的持仓当前价格和浮动盈亏
+    更新指定股票所有策略持仓的当前价格和浮动盈亏
     
-    根据最新价格更新 sim_positions 表中的 current_price、unrealized_pnl、unrealized_pnl_pct。
+    根据最新价格更新 sim_positions 表中该股票所有策略持仓的 
+    current_price、unrealized_pnl、unrealized_pnl_pct。
     供计划任务巡检时调用，确保持仓盈亏数据与实时行情同步。
     
     Args:
@@ -448,20 +444,23 @@ def update_position_price(user_id, symbol, current_price):
         current_price: 最新价格
         
     Returns:
-        bool: 是否成功更新
+        int: 更新的持仓记录数量
     """
     positions = SimulationPosition.find_by_user_id(user_id)
+    updated_count = 0
     for pos in positions:
         if pos["symbol"] == symbol and pos["shares"] > 0:
+            strategy = pos.get("strategy_type", "manual")
             SimulationPosition.upsert(
                 user_id, symbol, pos["name"],
                 pos["shares"], pos["avg_cost"],
-                current_price, pos.get("strategy_type", "manual")
+                current_price, strategy
             )
+            unrealized = round((current_price - pos["avg_cost"]) * pos["shares"], 2)
             logger.info(
-                f"[UpdatePrice] user_id={user_id} symbol={symbol} "
+                f"[UpdatePrice] user_id={user_id} symbol={symbol}[{strategy}] "
                 f"price={current_price} shares={pos['shares']} avg_cost={pos['avg_cost']} "
-                f"unrealized_pnl={round((current_price - pos['avg_cost']) * pos['shares'], 2)}"
+                f"unrealized_pnl={unrealized}"
             )
-            return True
-    return False
+            updated_count += 1
+    return updated_count

@@ -14,13 +14,15 @@ MACD 网格模式说明：
 - MACD_HIST 历史均值大（趋势强）→ 自动扩大网格区间
 - MACD_HIST 历史均值小（震荡） → 自动缩小网格区间
 """
-
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, Union
+import logging
 
 
 # ==================== 全局常量配置 ====================
+
+logger = logging.getLogger(__name__)
 
 # 默认网格格数（将价格区间划分为 N 个网格档位）
 DEFAULT_GRID_COUNT = 10

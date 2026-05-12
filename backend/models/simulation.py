@@ -7,12 +7,14 @@
 
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Numeric, DateTime
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, UniqueConstraint
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from .db import Base, get_session
 from ..utils.timezone import china_now_naive
+import logging
 
+logger = logging.getLogger(__name__)
 
 class SimAccount(Base):
     """
@@ -38,8 +40,12 @@ class SimPosition(Base):
 
     对应数据库表 sim_positions，存储用户的模拟持仓信息，
     包括股票代码、持仓数量、平均成本、当前价格和策略类型等。
+    唯一约束：(user_id, symbol, strategy_type)，同一用户同一股票同一策略只能有一条持仓记录。
     """
     __tablename__ = "sim_positions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "symbol", "strategy_type", name="uq_user_symbol_strategy"),
+    )
 
     id = Column(Integer, primary_key=True)                                         # 持仓记录ID，主键
     user_id = Column(Integer, nullable=False)                                      # 用户ID
@@ -223,21 +229,46 @@ class SimulationPosition:
         }
 
     @classmethod
-    def find_by_user_id(cls, user_id):
+    def find_by_user_id(cls, user_id, strategy=None):
         """
         根据用户ID查询所有有效持仓（持仓数量大于0）
 
         Args:
             user_id (int): 用户ID
+            strategy (str | None): 策略类型过滤，若指定则只返回该策略的持仓
 
         Returns:
             list[dict]: 持仓信息字典列表
         """
         with get_session() as session:
-            rows = session.query(SimPosition).filter(
+            query = session.query(SimPosition).filter(
                 SimPosition.user_id == user_id, SimPosition.shares > 0
-            ).all()
+            )
+            if strategy:
+                query = query.filter(SimPosition.strategy_type == strategy)
+            rows = query.all()
             return [cls.from_row(r) for r in rows]
+
+    @classmethod
+    def find_by_strategy(cls, user_id, symbol, strategy):
+        """
+        根据用户ID、股票代码和策略类型查询持仓
+
+        Args:
+            user_id (int): 用户ID
+            symbol (str): 股票代码
+            strategy (str): 策略类型
+
+        Returns:
+            dict | None: 持仓信息字典，若不存在则返回 None
+        """
+        with get_session() as session:
+            row = session.query(SimPosition).filter(
+                SimPosition.user_id == user_id,
+                SimPosition.symbol == symbol,
+                SimPosition.strategy_type == strategy,
+            ).first()
+            return cls.from_row(row)
 
     @classmethod
     def upsert(cls, user_id, symbol, name, shares, avg_cost, current_price, strategy_type="manual"):
@@ -267,7 +298,9 @@ class SimulationPosition:
         with get_session() as session:
             if shares <= 0:
                 session.query(SimPosition).filter(
-                    SimPosition.user_id == user_id, SimPosition.symbol == symbol
+                    SimPosition.user_id == user_id,
+                    SimPosition.symbol == symbol,
+                    SimPosition.strategy_type == strategy_type,
                 ).delete()
             else:
                 stmt = pg_insert(SimPosition).values(
@@ -282,7 +315,7 @@ class SimulationPosition:
                     unrealized_pnl_pct=unrealized_pnl_pct,
                 )
                 stmt = stmt.on_conflict_do_update(
-                    index_elements=["user_id", "symbol"],
+                    index_elements=["user_id", "symbol", "strategy_type"],
                     set_={
                         "name": stmt.excluded.name,
                         "shares": stmt.excluded.shares,
@@ -419,6 +452,7 @@ class SimulationOrder:
         具体检查：
         - sim_positions 表的 strategy_type、unrealized_pnl、unrealized_pnl_pct 字段
         - sim_orders 表的 trade_type 字段
+        - sim_positions 表的唯一约束 (user_id, symbol, strategy_type)
         """
         from .db import engine
         from sqlalchemy import inspect, text
@@ -434,5 +468,28 @@ class SimulationOrder:
                         conn.execute(text("ALTER TABLE sim_positions ADD COLUMN unrealized_pnl NUMERIC DEFAULT 0"))
                     if "unrealized_pnl_pct" not in columns:
                         conn.execute(text("ALTER TABLE sim_positions ADD COLUMN unrealized_pnl_pct NUMERIC DEFAULT 0"))
+
+                    constraints = inspector.get_unique_constraints(table_name)
+                    constraint_names = [c["name"] for c in constraints if c.get("name")]
+
+                    for constraint in constraints:
+                        cols = set(constraint.get("column_names", []))
+                        if cols == {"user_id", "symbol"} and "strategy_type" not in cols:
+                            constraint_name = constraint.get("name")
+                            if constraint_name:
+                                conn.execute(text(f"ALTER TABLE sim_positions DROP CONSTRAINT {constraint_name}"))
+                                logger.info(f"[Migration] 删除旧唯一约束: {constraint_name}")
+
+                    new_constraint_exists = any(
+                        set(c.get("column_names", [])) == {"user_id", "symbol", "strategy_type"}
+                        for c in constraints
+                    )
+                    if not new_constraint_exists:
+                        conn.execute(text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_symbol_strategy "
+                            "ON sim_positions (user_id, symbol, strategy_type)"
+                        ))
+                        logger.info("[Migration] 创建新唯一索引: uq_user_symbol_strategy")
+
                 if table_name == "sim_orders" and "trade_type" not in columns:
                     conn.execute(text("ALTER TABLE sim_orders ADD COLUMN trade_type VARCHAR DEFAULT 'manual'"))

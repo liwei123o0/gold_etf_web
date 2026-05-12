@@ -256,7 +256,28 @@ class AutoTradeScheduler:
         return False
 
     @classmethod
-    def _get_sim_position(cls, user_id: int, symbol: str, portfolio: dict = None) -> dict:
+    def _get_sim_position(cls, user_id: int, symbol: str, strategy: str = None, portfolio: dict = None) -> dict:
+        """
+        从模拟账户读取指定策略的持仓数据
+        
+        Args:
+            user_id: 用户ID
+            symbol: 股票代码
+            strategy: 策略类型，用于隔离不同策略的持仓
+            portfolio: 可选的账户信息缓存
+            
+        Returns:
+            dict: 包含 shares 和 avg_cost 的持仓信息
+        """
+        from backend.models.simulation import SimulationPosition
+        if strategy:
+            pos = SimulationPosition.find_by_strategy(user_id, symbol, strategy)
+            if pos:
+                return {
+                    "shares": int(pos.get("shares", 0)) or 0,
+                    "avg_cost": float(pos.get("avg_cost", 0)) or 0,
+                }
+            return {"shares": 0, "avg_cost": 0}
         if portfolio is None:
             portfolio = st.get_portfolio(user_id)
         sim_positions = {p["symbol"]: p for p in (portfolio.get("positions", []) if portfolio else [])}
@@ -268,19 +289,28 @@ class AutoTradeScheduler:
 
     @classmethod
     def _get_task_position(cls, task_cfg: dict) -> dict:
-        """优先从模拟账户读取持仓数据，fallback到任务自身配置"""
+        """
+        优先从模拟账户读取该策略的持仓数据，fallback到任务自身配置
+        
+        按策略类型隔离持仓，确保不同策略的持仓互不干扰。
+        
+        Args:
+            task_cfg: 任务配置字典，包含 user_id, symbol, strategy 等字段
+            
+        Returns:
+            dict: 包含 shares 和 avg_cost 的持仓信息
+        """
+        from backend.models.simulation import SimulationPosition
         user_id = task_cfg["user_id"]
         symbol = task_cfg["symbol"]
+        strategy = task_cfg.get("strategy", "grid")
 
-        portfolio = st.get_portfolio(user_id)
-        if portfolio:
-            sim_positions = {p["symbol"]: p for p in portfolio.get("positions", [])}
-            pos = sim_positions.get(symbol, {})
-            if pos and pos.get("shares", 0) > 0:
-                return {
-                    "shares": int(pos.get("shares", 0)),
-                    "avg_cost": float(pos.get("avg_cost", 0)),
-                }
+        pos = SimulationPosition.find_by_strategy(user_id, symbol, strategy)
+        if pos and pos.get("shares", 0) > 0:
+            return {
+                "shares": int(pos.get("shares", 0)),
+                "avg_cost": float(pos.get("avg_cost", 0)),
+            }
 
         return {
             "shares": int(task_cfg.get("position_shares", 0) or 0),
@@ -407,15 +437,32 @@ class AutoTradeScheduler:
         strategy_type = strategy if strategy != "manual" else "manual"
 
         if value_diff > 0:
+            if close <= 0:
+                logger.warning(f"[CashGuard] {user_id}/{symbol} 价格无效 close={close}")
+                return None
             shares = int(round(value_diff / close / 100)) * 100
             if shares < 100:
                 return None
             amount = close * shares
             commission_est = max(amount * commission_rate, min_commission)
             if task_cash < (amount + commission_est):
-                logger.warning(f"[CashGuard] {user_id}/{symbol} 任务现金不足 task_cash={task_cash:.2f} < need={amount + commission_est:.2f}")
-                return None
-            result = st.execute_trade(user_id, "buy", symbol, trade_name, close, shares, trade_type=specific_trade_type, strategy_type=strategy_type)
+                max_affordable_amount = task_cash - max(task_cash * commission_rate, min_commission)
+                if max_affordable_amount <= 0:
+                    logger.warning(
+                        f"[CashGuard] {user_id}/{symbol} 任务现金不足以支付最低佣金 task_cash={task_cash:.2f}")
+                    return None
+                max_shares = int(max_affordable_amount / close / 100) * 100
+                if max_shares < 100:
+                    logger.warning(
+                        f"[CashGuard] {user_id}/{symbol} 任务现金不足 task_cash={task_cash:.2f} < need={amount + commission_est:.2f}")
+                    return None
+                logger.info(
+                    f"[CashGuard] {user_id}/{symbol} 资金不足调整: 原计划{shares}股 → 调整为{max_shares}股 (task_cash={task_cash:.2f})")
+                shares = max_shares
+                amount = close * shares
+                commission_est = max(amount * commission_rate, min_commission)
+            result = st.execute_trade(user_id, "buy", symbol, trade_name, close, shares, trade_type=specific_trade_type,
+                                      strategy_type=strategy_type)
             action_str = "买入"
         else:
             sell_amount = abs(value_diff)
@@ -430,6 +477,7 @@ class AutoTradeScheduler:
             action_str = "卖出"
 
         if result.get("success"):
+            from backend.models.simulation import SimulationPosition
             old_shares = cur_shares
             old_avg_cost = cur_avg_cost
 
@@ -443,15 +491,13 @@ class AutoTradeScheduler:
                 new_shares = max(0, old_shares - shares)
                 new_avg_cost = old_avg_cost
 
-            updated_portfolio = result.get("portfolio", {})
-            sim_positions = {p["symbol"]: p for p in updated_portfolio.get("positions", [])}
-            sim_pos = sim_positions.get(symbol, {})
-            sim_shares = int(sim_pos.get("shares", 0)) or 0
-            sim_avg_cost = float(sim_pos.get("avg_cost", 0)) or 0
+            sim_pos = SimulationPosition.find_by_strategy(user_id, symbol, strategy_type)
+            sim_shares = int(sim_pos.get("shares", 0)) if sim_pos else 0
+            sim_avg_cost = float(sim_pos.get("avg_cost", 0)) if sim_pos else 0
 
             if sim_shares > 0 and abs(sim_avg_cost - new_avg_cost) > 0.001:
                 logger.warning(
-                    f"[CostSync] {user_id}/{symbol} 持仓成本不一致: "
+                    f"[CostSync] {user_id}/{symbol}[{strategy_type}] 持仓成本不一致: "
                     f"任务计算={new_avg_cost:.4f} (基于{old_shares}股@{old_avg_cost:.4f}+{shares}股@{close:.4f}), "
                     f"模拟账户={sim_avg_cost:.4f} ({sim_shares}股), "
                     f"差异={abs(sim_avg_cost - new_avg_cost):.4f}, 以任务计算值为准"
@@ -459,7 +505,7 @@ class AutoTradeScheduler:
 
             if sim_shares != new_shares:
                 logger.info(
-                    f"[CostSync] {user_id}/{symbol} 持仓数量差异: 任务计算={new_shares}, 模拟账户={sim_shares}, 以任务计算值为准"
+                    f"[CostSync] {user_id}/{symbol}[{strategy_type}] 持仓数量差异: 任务计算={new_shares}, 模拟账户={sim_shares}, 以任务计算值为准"
                 )
 
             new_task_cash = cls._calc_task_cash(allocated_funds, new_shares, new_avg_cost)

@@ -50,6 +50,12 @@ class AutoTradeService:
         根据配置创建新的自动交易任务，任务默认处于停止状态（enabled=False）。
         如果该股票已有任务，则更新现有任务配置。
         
+        当用户输入了持有数量和持仓成本时，会自动：
+        1. 确保用户有模拟账户
+        2. 写入 sim_positions 表（strategy_type='manual'）
+        3. 写入 sim_orders 表（trade_type='manual'）
+        4. 扣减账户现金
+        
         Args:
             user_id: 用户ID
             symbol: 股票代码
@@ -67,14 +73,43 @@ class AutoTradeService:
         Returns:
             dict: 包含 success 和 task 字段的结果
         """
-        # 计算任务可用现金
+        from backend.services import simulation_trade as st
+        import logging
+        logger = logging.getLogger(__name__)
+
         position_shares = config.get("position_shares", 0) or 0
         position_avg_cost = config.get("position_avg_cost", 0) or 0
         allocated_funds = config.get("allocated_funds", 0) or 0
         position_value = position_shares * position_avg_cost if position_shares > 0 and position_avg_cost > 0 else 0
         task_cash = allocated_funds - position_value
 
-        # 构建任务配置
+        if position_shares > 0 and position_avg_cost > 0:
+            portfolio = st.get_portfolio(user_id)
+            if portfolio is None:
+                st.reset_portfolio(user_id, 100000.0)
+                portfolio = st.get_portfolio(user_id)
+                logger.info(f"[AddTask] user_id={user_id} 创建初始模拟账户")
+
+            task_name = config.get("task_name", symbol)
+            result = st.execute_trade(
+                user_id, "buy", symbol, task_name,
+                position_avg_cost, position_shares,
+                trade_type="manual",
+                strategy_type="manual"
+            )
+
+            if result.get("success"):
+                logger.info(
+                    f"[AddTask] user_id={user_id} symbol={symbol} "
+                    f"手动持仓写入成功: {position_shares}股 @ {position_avg_cost}, "
+                    f"扣减资金={position_value:.2f}"
+                )
+            else:
+                logger.warning(
+                    f"[AddTask] user_id={user_id} symbol={symbol} "
+                    f"手动持仓写入失败: {result.get('error', '未知错误')}"
+                )
+
         cfg = {
             "strategy": config.get("strategy", "grid"),
             "grid_count": config.get("grid_count", 10),
@@ -84,7 +119,7 @@ class AutoTradeService:
             "position_size": config.get("position_size", 1.0),
             "check_interval": config.get("check_interval", 30),
             "allocated_funds": allocated_funds,
-            "enabled": False,  # 新建任务默认停止
+            "enabled": False,
             "last_check": None,
             "last_signal": None,
             "task_cash": task_cash,
@@ -253,6 +288,7 @@ class AutoTradeService:
         更新任务的配置参数
         
         合并现有配置和新配置，更新任务记录。
+        如果修改了持有数量或持仓成本，会同步更新 sim_positions 表。
         
         Args:
             task_id: 任务ID
@@ -261,13 +297,48 @@ class AutoTradeService:
         Returns:
             dict: 包含 success 和 task 字段的结果
         """
+        from backend.services import simulation_trade as st
+        from backend.models.simulation import SimulationPosition
+        import logging
+        logger = logging.getLogger(__name__)
+
         existing = AutoTradeTask.find_by_id(task_id)
         if not existing:
             return {"success": False, "error": f"任务 {task_id} 不存在"}
 
-        # 合并配置
+        user_id = existing["user_id"]
+        symbol = existing["symbol"]
+
+        old_shares = int(existing.get("position_shares", 0) or 0)
+        old_avg_cost = float(existing.get("position_avg_cost", 0) or 0)
+        new_shares = int(config.get("position_shares", 0) or 0)
+        new_avg_cost = float(config.get("position_avg_cost", 0) or 0)
+
+        if new_shares != old_shares or (new_shares > 0 and abs(new_avg_cost - old_avg_cost) > 0.0001):
+            if new_shares > 0 and new_avg_cost > 0:
+                task_name = existing.get("task_name", symbol)
+                SimulationPosition.upsert(
+                    user_id, symbol, task_name,
+                    new_shares, new_avg_cost, new_avg_cost,
+                    strategy_type="manual"
+                )
+                logger.info(
+                    f"[UpdateTask] user_id={user_id} symbol={symbol} "
+                    f"持仓更新: {old_shares}股@{old_avg_cost} → {new_shares}股@{new_avg_cost}"
+                )
+            elif new_shares <= 0:
+                SimulationPosition.upsert(
+                    user_id, symbol, "",
+                    0, 0, 0, "manual"
+                )
+                logger.info(f"[UpdateTask] user_id={user_id} symbol={symbol} 持仓清空")
+
         updated = {**existing, **config}
-        AutoTradeTask.upsert(existing["user_id"], existing["symbol"], updated)
+        allocated_funds = updated.get("allocated_funds", 0) or 0
+        position_value = new_shares * new_avg_cost if new_shares > 0 and new_avg_cost > 0 else 0
+        updated["task_cash"] = allocated_funds - position_value
+
+        AutoTradeTask.upsert(user_id, symbol, updated)
         task = AutoTradeTask.find_by_id(task_id)
         return {"success": True, "task": task}
 
