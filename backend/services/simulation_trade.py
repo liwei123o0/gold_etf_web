@@ -407,6 +407,62 @@ def clear_orders(user_id):
     return {"success": True}
 
 
+def delete_position(user_id, symbol, strategy=None):
+    """
+    删除指定持仓记录
+    
+    直接删除持仓数据，不生成订单记录。用于管理操作。
+    
+    Args:
+        user_id: 用户ID
+        symbol: 股票代码
+        strategy: 策略类型，若为 None 则删除该股票所有策略的持仓
+        
+    Returns:
+        dict: 包含 success 和 portfolio 字段的结果
+    """
+    from backend.models.simulation import SimPosition
+    portfolio = get_portfolio(user_id)
+    if not portfolio:
+        return {"success": False, "error": "账户不存在"}
+    
+    with get_session() as session:
+        query = session.query(SimPosition).filter(
+            SimPosition.user_id == user_id,
+            SimPosition.symbol == symbol
+        )
+        if strategy:
+            query = query.filter(SimPosition.strategy_type == strategy)
+        query.delete()
+    
+    logger.info(f"[DeletePosition] user_id={user_id} symbol={symbol} strategy={strategy}")
+    return {"success": True, "portfolio": get_portfolio(user_id)}
+
+
+def clear_positions(user_id):
+    """
+    清空所有持仓记录
+    
+    直接删除所有持仓数据，不生成订单记录。用于管理操作。
+    
+    Args:
+        user_id: 用户ID
+        
+    Returns:
+        dict: 包含 success 和 portfolio 字段的结果
+    """
+    from backend.models.simulation import SimPosition
+    portfolio = get_portfolio(user_id)
+    if not portfolio:
+        return {"success": False, "error": "账户不存在"}
+    
+    with get_session() as session:
+        session.query(SimPosition).filter(SimPosition.user_id == user_id).delete()
+    
+    logger.info(f"[ClearPositions] user_id={user_id}")
+    return {"success": True, "portfolio": get_portfolio(user_id)}
+
+
 def update_prices(user_id, realtime_map):
     """
     更新持仓的当前价格

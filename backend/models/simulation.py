@@ -485,11 +485,18 @@ class SimulationOrder:
                         for c in constraints
                     )
                     if not new_constraint_exists:
-                        conn.execute(text(
-                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_symbol_strategy "
-                            "ON sim_positions (user_id, symbol, strategy_type)"
-                        ))
-                        logger.info("[Migration] 创建新唯一索引: uq_user_symbol_strategy")
+                        try:
+                            conn.execute(text(
+                                "ALTER TABLE sim_positions "
+                                "ADD CONSTRAINT uq_user_symbol_strategy "
+                                "UNIQUE (user_id, symbol, strategy_type)"
+                            ))
+                            logger.info("[Migration] 创建新唯一约束: uq_user_symbol_strategy")
+                        except Exception as e:
+                            if "already exists" in str(e):
+                                logger.info("[Migration] 唯一约束 uq_user_symbol_strategy 已存在，跳过创建")
+                            else:
+                                raise
 
                 if table_name == "sim_orders" and "trade_type" not in columns:
                     conn.execute(text("ALTER TABLE sim_orders ADD COLUMN trade_type VARCHAR DEFAULT 'manual'"))

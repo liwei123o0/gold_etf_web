@@ -317,6 +317,16 @@ export const stockService = {
     return response.data
   },
 
+  async deletePosition(userId: number, symbol: string, strategy?: string): Promise<any> {
+    const response = await api.delete<any>('/simulation/position', { data: { user_id: userId, symbol, strategy } })
+    return response.data
+  },
+
+  async clearPositions(userId: number): Promise<any> {
+    const response = await api.delete<any>('/simulation/positions', { data: { user_id: userId } })
+    return response.data
+  },
+
   async getSettings(): Promise<SimSettings> {
     const response = await api.get<SimSettings>('/settings')
     return response.data

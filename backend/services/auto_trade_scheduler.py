@@ -17,6 +17,7 @@ from backend.services import grid_trade
 from backend.services.strategies import StrategyFactory
 from backend.routes.realtime import get_realtime
 from backend.utils.timezone import china_now_naive
+from backend.utils.symbol import normalize_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,33 @@ class AutoTradeScheduler:
         return max(10, min(base, 90))
 
     @classmethod
+    def _batch_update_all_positions(cls, all_tasks: list):
+        user_ids = list(set(t.get("user_id") for t in all_tasks if t.get("user_id")))
+        for uid in user_ids:
+            try:
+                positions = st.get_portfolio(uid)
+                if not positions or not positions.get("positions"):
+                    continue
+                pos_symbols = list(set(p["symbol"] for p in positions["positions"] if p.get("shares", 0) > 0))
+                if not pos_symbols:
+                    continue
+                sym_str = ",".join(pos_symbols)
+                rt_result = get_realtime(sym_str)
+                realtime_map = {}
+                if rt_result.get("code") == 0 and rt_result.get("data"):
+                    for sym, item in rt_result["data"].items():
+                        if item and item.get("price"):
+                            realtime_map[sym] = item
+                            alt = sym.replace("sh", "").replace("sz", "")
+                            if alt != sym:
+                                realtime_map[alt] = item
+                if realtime_map:
+                    st.update_prices(uid, realtime_map)
+                    logger.info(f"[BatchPrice] user_id={uid} 批量更新 {len(realtime_map)} 个持仓价格")
+            except Exception as e:
+                logger.warning(f"[BatchPrice] user_id={uid} 批量更新持仓价格失败: {e}")
+
+    @classmethod
     async def _check_all_tasks(cls):
         is_trading_time = cls._is_trading_time()
         logger.info(f"[Scheduler] _check_all_tasks 开始: is_trading_time={is_trading_time}")
@@ -164,6 +192,8 @@ class AutoTradeScheduler:
         cls._data_cache = data_cache
         import time as _time
         cls._data_cache_ts = _time.time()
+
+        cls._batch_update_all_positions(all_tasks)
 
         for task_cfg in all_tasks:
             try:
@@ -544,20 +574,29 @@ class AutoTradeScheduler:
             return
 
         latest = df.iloc[-1]
-        close = float(latest["收盘"])
+        kline_close = float(latest["收盘"])
         allocated_funds = task_cfg.get("allocated_funds", 0)
 
         try:
             rt = get_realtime(symbol)
-            trade_price = float(rt.get("price", 0)) if rt.get("price") else close
+            logger.debug(f"[Realtime] {user_id}/{symbol} 实时行情响应: code={rt.get('code')}, has_data={bool(rt.get('data'))}")
+            if rt.get("code") == 0 and rt.get("data"):
+                data = rt["data"]
+                symbol_data = data.get(symbol) or data.get(normalize_symbol(symbol)) or {}
+                if symbol_data and symbol_data.get("price"):
+                    realtime_price = float(symbol_data.get("price", 0))
+                    logger.info(f"[Realtime] {user_id}/{symbol} 获取实时价格成功: {realtime_price:.4f}")
+                else:
+                    logger.warning(f"[Realtime] {user_id}/{symbol} 实时行情无价格数据, symbol_data={symbol_data}")
+                    realtime_price = kline_close
+            else:
+                logger.warning(f"[Realtime] {user_id}/{symbol} 实时行情获取失败: {rt.get('msg', rt.get('error', '未知错误'))}")
+                realtime_price = kline_close
         except Exception as e:
-            logger.warning(f"[Realtime] {user_id}/{symbol} 获取实时价格失败: {e}, 使用K线收盘价")
-            trade_price = close
+            logger.warning(f"[Realtime] {user_id}/{symbol} 获取实时价格异常: {e}, 使用K线收盘价")
+            realtime_price = kline_close
 
-        try:
-            st.update_position_price(user_id, symbol, trade_price)
-        except Exception as e:
-            logger.warning(f"[Scheduler] {user_id}/{symbol} 更新持仓价格失败: {e}")
+        close = realtime_price
 
         portfolio = st.get_portfolio(user_id)
         account_cash = float(portfolio["account"].get("cash", 0)) if portfolio and portfolio.get("account") else 0
@@ -587,7 +626,7 @@ class AutoTradeScheduler:
                 AutoTradeTask.update_enabled(task_cfg["id"], False)
                 return
 
-        sl_result = await cls._check_stop_loss_take_profit(task_cfg, close, cur_shares, cur_avg_cost, trade_price)
+        sl_result = await cls._check_stop_loss_take_profit(task_cfg, close, cur_shares, cur_avg_cost, close)
         if sl_result:
             return
 
@@ -608,7 +647,9 @@ class AutoTradeScheduler:
                 effective_strategy = recommended
             task_cfg = {**task_cfg, "strategy": effective_strategy}
 
-        signal = cls._calc_trade_signal(task_cfg, latest, df)
+        latest_with_realtime = latest.copy()
+        latest_with_realtime['收盘'] = close
+        signal = cls._calc_trade_signal(task_cfg, latest_with_realtime, df)
         signal = cls._apply_trend_filter(signal, trend_above, trend_ma_key, user_id, symbol)
 
         if task_cfg.get("use_multi_factor", False):
@@ -660,7 +701,7 @@ class AutoTradeScheduler:
 
         trade_name = latest.get("名称", symbol) or symbol
         settings = SimSettings.get(symbol)
-        cls._execute_order(task_cfg, delta, trade_price, cur_shares, allocated_funds, trade_name, settings)
+        cls._execute_order(task_cfg, delta, close, cur_shares, allocated_funds, trade_name, settings)
 
     @classmethod
     async def _force_close_position(cls, user_id, symbol, close, shares, task_cfg, reason, close_type):

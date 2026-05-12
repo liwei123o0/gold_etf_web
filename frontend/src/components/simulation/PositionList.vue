@@ -28,17 +28,36 @@ function getStrategyClass(type: string): string {
 async function closePosition(symbol: string, shares: number, price: number, name: string) {
   await simStore.sell(symbol, name, price, shares)
 }
+
+async function deletePosition(symbol: string, strategy: string) {
+  if (confirm(`确定要删除 ${symbol} (${getStrategyLabel(strategy)}) 的持仓记录吗？\n此操作不会生成卖出订单，持仓数据将直接删除。`)) {
+    await simStore.deletePosition(symbol, strategy)
+  }
+}
+
+async function clearAllPositions() {
+  if (confirm('确定要清空所有持仓记录吗？\n此操作不会生成卖出订单，所有持仓数据将直接删除。')) {
+    await simStore.clearPositions()
+  }
+}
 </script>
 
 <template>
   <div class="position-list">
     <div class="panel-header">
       <h3 class="section-title">持仓明细 ({{ positions.length }})</h3>
-      <button 
-        v-if="positions.length > 0"
-        class="close-all-btn"
-        @click="simStore.closeAll()"
-      >全部清仓</button>
+      <div class="header-actions">
+        <button 
+          v-if="positions.length > 0"
+          class="clear-btn"
+          @click="clearAllPositions"
+        >清空持仓</button>
+        <button 
+          v-if="positions.length > 0"
+          class="close-all-btn"
+          @click="simStore.closeAll()"
+        >全部清仓</button>
+      </div>
     </div>
 
     <div v-if="positions.length === 0" class="empty-pos">
@@ -61,7 +80,7 @@ async function closePosition(symbol: string, shares: number, price: number, name
           </tr>
         </thead>
         <tbody>
-          <tr v-for="p in positions" :key="p.symbol">
+          <tr v-for="p in positions" :key="p.symbol + '-' + p.strategy_type">
             <td>
               <div class="sym-name">{{ p.name }}</div>
               <div class="sym-code">{{ formatSymbolForDisplay(p.symbol) }}</div>
@@ -82,9 +101,14 @@ async function closePosition(symbol: string, shares: number, price: number, name
               {{ posSign(p.unrealized_pnl_pct) }}{{ p.unrealized_pnl_pct.toFixed(2) }}%
             </td>
             <td>
-              <button class="sell-btn" @click="closePosition(p.symbol, p.shares, p.current_price, p.name)">
-                卖出
-              </button>
+              <div class="action-btns">
+                <button class="sell-btn" @click="closePosition(p.symbol, p.shares, p.current_price, p.name)">
+                  卖出
+                </button>
+                <button class="delete-btn" @click="deletePosition(p.symbol, p.strategy_type)">
+                  删除
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -113,6 +137,26 @@ async function closePosition(symbol: string, shares: number, price: number, name
   color: #7986cb;
   font-size: 15px;
   margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.clear-btn {
+  padding: 4px 12px;
+  background: rgba(255, 152, 0, 0.1);
+  border: 1px solid #ff9800;
+  border-radius: 4px;
+  color: #ff9800;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(255, 152, 0, 0.2);
+  }
 }
 
 .close-all-btn {
@@ -190,6 +234,29 @@ async function closePosition(symbol: string, shares: number, price: number, name
   &:hover {
     background: rgba(38, 166, 154, 0.25);
   }
+}
+
+.delete-btn {
+  padding: 4px 10px;
+  background: rgba(158, 158, 158, 0.1);
+  border: 1px solid #9e9e9e;
+  border-radius: 4px;
+  color: #9e9e9e;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(158, 158, 158, 0.2);
+    color: #ef5350;
+    border-color: #ef5350;
+  }
+}
+
+.action-btns {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
 }
 
 .strategy-badge {

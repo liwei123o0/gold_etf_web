@@ -122,6 +122,46 @@ export const useSimulationStore = defineStore('simulation', () => {
     }
   }
 
+  async function deletePosition(symbol: string, strategy?: string) {
+    if (!authStore.user) return { success: false, error: '未登录' }
+    isLoading.value = true
+    error.value = null
+    try {
+      const result = await stockService.deletePosition(authStore.user.id, symbol, strategy)
+      if (result.success) {
+        portfolio.value = result.portfolio
+      } else {
+        error.value = result.error
+      }
+      return result
+    } catch (e: any) {
+      error.value = e.message
+      return { success: false, error: e.message }
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  async function clearPositions() {
+    if (!authStore.user) return { success: false, error: '未登录' }
+    isLoading.value = true
+    error.value = null
+    try {
+      const result = await stockService.clearPositions(authStore.user.id)
+      if (result.success) {
+        portfolio.value = result.portfolio
+      } else {
+        error.value = result.error
+      }
+      return result
+    } catch (e: any) {
+      error.value = e.message
+      return { success: false, error: e.message }
+    } finally {
+      isLoading.value = false
+    }
+  }
+
   async function updateRealtime(symbols: string[]) {
     try {
       const result = await stockService.getRealtime(symbols.join(','))
@@ -265,6 +305,8 @@ export const useSimulationStore = defineStore('simulation', () => {
     sell,
     closeAll,
     clearOrders,
+    deletePosition,
+    clearPositions,
     updateRealtime,
     autoTradeTasks,
     taskCount,

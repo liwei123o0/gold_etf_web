@@ -14,6 +14,7 @@ import sys
 import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
+from pydantic import BaseModel
 
 # 将项目根目录添加到 Python 模块搜索路径，确保 backend 包可被正确导入
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -761,17 +762,85 @@ async def clear_orders(authorization: Optional[str] = Header(None)):
     返回值：{"success": True}
     """
     try:
-        # 从 Authorization 头提取用户信息
         user_info = None
         if authorization and authorization.startswith("Bearer "):
             user_info = get_current_user(authorization[7:])
         if not user_info:
             raise HTTPException(status_code=401, detail="未登录")
-        # 清空该用户的成交记录
         st.clear_orders(user_info["user_id"])
         return {"success": True}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DeletePositionRequest(BaseModel):
+    user_id: int
+    symbol: str
+    strategy: Optional[str] = None
+
+
+@app.delete("/api/simulation/position", response_model=SimulationOrderResponse, tags=["模拟交易"])
+async def delete_position(request: DeletePositionRequest):
+    """
+    删除指定持仓记录接口
+
+    直接删除持仓数据，不生成订单记录。用于管理操作。
+
+    请求方式：DELETE
+    请求路径：/api/simulation/position
+
+    请求参数（JSON Body）：
+        user_id (int): 用户 ID
+        symbol (str): 股票代码
+        strategy (str, optional): 策略类型，不传则删除该股票所有策略的持仓
+
+    返回值：删除后的组合信息
+    """
+    try:
+        result = st.delete_position(request.user_id, request.symbol, request.strategy)
+        if not result["success"]:
+            return SimulationOrderResponse(success=False, error=result.get("error"))
+
+        portfolio = result["portfolio"]
+        return SimulationOrderResponse(
+            success=True,
+            portfolio=_build_portfolio(portfolio)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ClearPositionsRequest(BaseModel):
+    user_id: int
+
+
+@app.delete("/api/simulation/positions", response_model=SimulationOrderResponse, tags=["模拟交易"])
+async def clear_positions(request: ClearPositionsRequest):
+    """
+    清空所有持仓记录接口
+
+    直接删除所有持仓数据，不生成订单记录。用于管理操作。
+
+    请求方式：DELETE
+    请求路径：/api/simulation/positions
+
+    请求参数（JSON Body）：
+        user_id (int): 用户 ID
+
+    返回值：清空后的组合信息
+    """
+    try:
+        result = st.clear_positions(request.user_id)
+        if not result["success"]:
+            return SimulationOrderResponse(success=False, error=result.get("error"))
+
+        portfolio = result["portfolio"]
+        return SimulationOrderResponse(
+            success=True,
+            portfolio=_build_portfolio(portfolio)
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
