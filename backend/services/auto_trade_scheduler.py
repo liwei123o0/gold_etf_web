@@ -288,8 +288,8 @@ class AutoTradeScheduler:
         now = get_china_now()
 
         # 首先检查是否为交易日
-        if not is_trade_date(now.date()):
-            return False
+        # if not is_trade_date(now.date()):
+        #     return False
 
         # 转换为分钟数便于比较（小时*60 + 分钟）
         hour_minute = now.hour * 60 + now.minute
